@@ -1,0 +1,175 @@
+name: Contracts CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "contracts/**"
+      - ".github/workflows/contracts-ci.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "contracts/**"
+      - ".github/workflows/contracts-ci.yml"
+
+jobs:
+  contracts:
+    name: Soroban Contract Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-contracts-cargo-${{ hashFiles('contracts/Cargo.lock') }}
+
+      - name: Run Soroban contract tests
+        run: cargo test --manifest-path contracts/stellarkraal/Cargo.toml
+
+      - name: Build release WASM
+        run: |
+          cargo build \
+            --manifest-path contracts/stellarkraal/Cargo.toml \
+            --target wasm32-unknown-unknown \
+            --release
+
+  # Issue 38: WASM size / simulation cost / ABI compatibility gate.
+  # Only meaningful for pull requests, since it diffs the PR's head commit
+  # against the PR's base commit. The absolute-size sanity check that used
+  # to live in the job above is superseded by the baseline-relative check
+  # here (a flat byte ceiling doesn't tell you whether *this change*
+  # regressed anything).
+  contract-gate:
+    name: Contract Size / Cost / ABI Gate
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          path: head
+
+      - name: Checkout PR base
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-contract-gate-cargo-${{ hashFiles('head/contracts/Cargo.lock') }}
+
+      - name: Build & measure PR head
+        working-directory: head
+        run: |
+          if [ ! -f contracts/stellarkraal/Cargo.toml ]; then
+            echo "::error::contracts/stellarkraal/Cargo.toml missing on PR head"
+            exit 1
+          fi
+          cd contracts/stellarkraal
+          cargo build --release --target wasm32-unknown-unknown
+          cp ../target/wasm32-unknown-unknown/release/stellarkraal.wasm "$GITHUB_WORKSPACE/head.wasm"
+          cargo test report_instruction_costs -- --nocapture | tee /tmp/head_test_output.txt
+          grep -o 'CONTRACT_COST_REPORT_JSON:\[.*\]' /tmp/head_test_output.txt \
+            | sed 's/CONTRACT_COST_REPORT_JSON://' > "$GITHUB_WORKSPACE/head_cost.json"
+          python3 ../ci/extract_abi.py src/lib.rs > "$GITHUB_WORKSPACE/head_abi.json"
+
+      # Tolerant of failure: if `main` doesn't have contracts/ yet (e.g. this
+      # is the PR introducing it) or a pre-existing break on `main` fails the
+      # build, we fall back to "no baseline" rather than blocking this PR for
+      # a problem it didn't introduce.
+      - name: Build & measure PR base
+        working-directory: base
+        continue-on-error: true
+        run: |
+          if [ ! -f contracts/stellarkraal/Cargo.toml ]; then
+            echo "No contracts/stellarkraal on base ref — treating as first build, no baseline."
+            exit 0
+          fi
+          cd contracts/stellarkraal
+          cargo build --release --target wasm32-unknown-unknown
+          cp ../target/wasm32-unknown-unknown/release/stellarkraal.wasm "$GITHUB_WORKSPACE/base.wasm"
+          cargo test report_instruction_costs -- --nocapture | tee /tmp/base_test_output.txt
+          grep -o 'CONTRACT_COST_REPORT_JSON:\[.*\]' /tmp/base_test_output.txt \
+            | sed 's/CONTRACT_COST_REPORT_JSON://' > "$GITHUB_WORKSPACE/base_cost.json"
+          python3 ../ci/extract_abi.py src/lib.rs > "$GITHUB_WORKSPACE/base_abi.json"
+
+      - name: Check for size-override label
+        id: label
+        run: |
+          echo 'has_override=${{ contains(github.event.pull_request.labels.*.name, "contract-size-override") }}' >> "$GITHUB_OUTPUT"
+
+      - name: Compare against baseline
+        id: gate
+        run: |
+          ARGS=(--head-wasm head.wasm --head-cost head_cost.json --head-abi head_abi.json \
+                --size-override "${{ steps.label.outputs.has_override }}" \
+                --out-report report.md --out-summary summary.json)
+          [ -f base.wasm ] && ARGS+=(--base-wasm base.wasm)
+          [ -f base_cost.json ] && ARGS+=(--base-cost base_cost.json)
+          [ -f base_abi.json ] && ARGS+=(--base-abi base_abi.json)
+          python3 head/contracts/ci/compare_gate.py "${ARGS[@]}"
+          BLOCKING=$(python3 -c "import json; print(str(json.load(open('summary.json'))['blocking']).lower())")
+          echo "blocking=$BLOCKING" >> "$GITHUB_OUTPUT"
+
+      - name: Post or update PR comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- contract-gate-report -->';
+            const body = marker + '\n' + fs.readFileSync('report.md', 'utf8');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find((c) => c.body && c.body.startsWith(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      - name: Fail if blocking findings
+        if: steps.gate.outputs.blocking == 'true'
+        run: |
+          echo "::error::Contract gate has blocking findings — see the PR comment for details."
+          exit 1

@@ -1,0 +1,193 @@
+##
+# .github/workflows/e2e.yml
+#
+# End-to-End test workflow for StellarKraal.
+#
+# Runs the full credit lifecycle test suite against Soroban testnet:
+#   registration → appraisal → loan request → market view
+#
+# Triggers:
+#   - Push to main or any e2e/** branch
+#   - Pull requests targeting main
+#   - Manual dispatch (workflow_dispatch) with optional deploy-contract input
+#
+# Requirements (GitHub Actions secrets / variables):
+#   Secrets:
+#     E2E_SERVER_SECRET_KEY  — Stellar secret key for the oracle server account
+#     E2E_CONTRACT_ID        — Pre-deployed testnet contract ID
+#     JWT_SECRET             — JWT signing secret for the E2E backend instance
+#   Variables (optional — have safe defaults):
+#     E2E_ON_CHAIN_TIMEOUT_MS — defaults to 90000
+#
+# The backend is started in the same job as the tests, using a fresh SQLite
+# database, so no external services are required beyond Soroban testnet RPC
+# and Stellar Friendbot (both public, no auth needed).
+#
+# Closes #27
+##
+
+name: E2E — Credit Lifecycle
+
+on:
+  push:
+    branches:
+      - main
+      - 'e2e/**'
+      - 'feat/e2e-*'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      deploy-contract:
+        description: 'Deploy a fresh contract instance before running tests'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+# Cancel in-progress runs for the same branch/PR to save testnet funds
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: Full Lifecycle E2E (Soroban Testnet)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      # ── Node ────────────────────────────────────────────────────────────────
+      NODE_ENV: test
+
+      # ── E2E suite config ────────────────────────────────────────────────────
+      E2E_API_URL: http://localhost:3001
+      E2E_NETWORK: testnet
+      E2E_RPC_URL: https://soroban-testnet.stellar.org
+      E2E_VERBOSE: true
+      E2E_ON_CHAIN_TIMEOUT_MS: ${{ vars.E2E_ON_CHAIN_TIMEOUT_MS || '90000' }}
+      E2E_DEPLOY_CONTRACT: ${{ github.event.inputs.deploy-contract || 'false' }}
+
+      # ── Backend runtime ─────────────────────────────────────────────────────
+      PORT: 3001
+      FRONTEND_URL: http://localhost:3000
+      DATABASE_URL: file:./e2e.db
+      STELLAR_NETWORK: testnet
+      RPC_URL: https://soroban-testnet.stellar.org
+      POLL_INTERVAL_MS: 60000
+      START_LEDGER: '0'
+      LOG_LEVEL: warn
+
+    steps:
+      # ── 1. Checkout ─────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Set up Node.js ────────────────────────────────────────────────────
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # ── 3. Install dependencies ──────────────────────────────────────────────
+      - name: Install dependencies
+        run: npm ci
+
+      # ── 4. Generate Prisma client ────────────────────────────────────────────
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      # ── 5. Build TypeScript ──────────────────────────────────────────────────
+      - name: Build
+        run: npm run build
+
+      # ── 6. Write secrets to environment ──────────────────────────────────────
+      - name: Configure secrets
+        env:
+          E2E_SERVER_SECRET_KEY: ${{ secrets.E2E_SERVER_SECRET_KEY }}
+          E2E_CONTRACT_ID: ${{ secrets.E2E_CONTRACT_ID }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+        run: |
+          echo "E2E_SERVER_SECRET_KEY=${E2E_SERVER_SECRET_KEY}" >> $GITHUB_ENV
+          echo "E2E_CONTRACT_ID=${E2E_CONTRACT_ID}" >> $GITHUB_ENV
+          echo "JWT_SECRET=${JWT_SECRET}" >> $GITHUB_ENV
+          echo "SERVER_SECRET_KEY=${E2E_SERVER_SECRET_KEY}" >> $GITHUB_ENV
+          echo "CONTRACT_ID=${E2E_CONTRACT_ID}" >> $GITHUB_ENV
+
+      # ── 7. Start backend in background ───────────────────────────────────────
+      - name: Start backend server
+        run: |
+          node dist/server.js &
+          echo "BACKEND_PID=$!" >> $GITHUB_ENV
+        env:
+          DATABASE_URL: file:./e2e.db
+          CONTRACT_ID: ${{ secrets.E2E_CONTRACT_ID }}
+          SERVER_SECRET_KEY: ${{ secrets.E2E_SERVER_SECRET_KEY }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+
+      # ── 8. Wait for backend health check ─────────────────────────────────────
+      - name: Wait for backend to be ready
+        run: |
+          echo "Waiting for backend at http://localhost:3001/health ..."
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3001/health > /dev/null 2>&1; then
+              echo "Backend is ready after ${i} attempts"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Backend did not become ready in time"
+          exit 1
+
+      # ── 9. Run E2E test suite ─────────────────────────────────────────────────
+      - name: Run E2E lifecycle tests
+        run: npm run test:e2e
+        env:
+          # Pass all E2E env vars explicitly so they survive the subprocess boundary
+          E2E_API_URL: http://localhost:3001
+          E2E_NETWORK: testnet
+          E2E_RPC_URL: https://soroban-testnet.stellar.org
+          E2E_CONTRACT_ID: ${{ secrets.E2E_CONTRACT_ID }}
+          E2E_SERVER_SECRET_KEY: ${{ secrets.E2E_SERVER_SECRET_KEY }}
+          E2E_ON_CHAIN_TIMEOUT_MS: ${{ vars.E2E_ON_CHAIN_TIMEOUT_MS || '90000' }}
+          E2E_DEPLOY_CONTRACT: ${{ github.event.inputs.deploy-contract || 'false' }}
+          E2E_VERBOSE: true
+          DATABASE_URL: file:./e2e.db
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          NODE_ENV: test
+
+      # ── 10. Upload test report on failure ────────────────────────────────────
+      - name: Upload E2E failure report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-failure-report-${{ github.run_number }}
+          path: |
+            e2e-report.json
+            e2e.db
+          retention-days: 7
+
+      # ── 11. Stop backend ─────────────────────────────────────────────────────
+      - name: Stop backend server
+        if: always()
+        run: |
+          if [ -n "$BACKEND_PID" ]; then
+            kill "$BACKEND_PID" 2>/dev/null || true
+          fi
+
+      # ── 12. Post summary ─────────────────────────────────────────────────────
+      - name: Post job summary
+        if: always()
+        run: |
+          echo "## E2E Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Network:** Soroban Testnet" >> $GITHUB_STEP_SUMMARY
+          echo "- **Contract ID:** \`${{ secrets.E2E_CONTRACT_ID }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Run:** [${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "See the job logs for the structured step-by-step lifecycle report." >> $GITHUB_STEP_SUMMARY

@@ -92,3 +92,15 @@ model Loan {
   @@index([status])
   @@index([contractLoanId])
 }
+
+model IdempotencyKey {
+  id         String   @id @default(uuid())
+  key        String   @unique
+  response   String
+  statusCode Int
+  createdAt  DateTime @default(now())
+  expiresAt  DateTime
+
+  @@index([key])
+  @@index([expiresAt])
+}

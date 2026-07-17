@@ -1,0 +1,36 @@
+name: RBAC Consistency Audit
+
+on:
+  pull_request:
+    paths:
+      - 'contracts/**/*.rs'
+  push:
+    paths:
+      - 'contracts/**/*.rs'
+
+jobs:
+  rbac-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      
+      - name: Run RBAC Lint
+        run: ./scripts/rbac-lint.sh
+      
+      - name: Run RBAC Tests
+        run: |
+          cargo test -- --nocapture | grep -E "(test result|FAILED)"
+      
+      - name: Check Access Control Matrix
+        run: |
+          if [ ! -f docs/security/access-control-matrix.md ]; then
+            echo "❌ Access control matrix missing!"
+            exit 1
+          fi
+          echo "✅ Access control matrix present"

@@ -3,6 +3,7 @@ node_modules/
 
 # Build output
 dist/
+target/
 
 # Environment files (contain secrets)
 .env
@@ -15,9 +16,8 @@ dist/
 *.db-wal
 *.db-shm
 
-# Prisma generated (regenerated via `prisma generate`)
-# Keep prisma/schema.prisma but ignore generated client artifacts
-# node_modules/@prisma is already covered above
+# Soroban test snapshots (generated)
+**/test_snapshots/
 
 # Logs
 *.log

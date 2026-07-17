@@ -1,0 +1,20 @@
+[package]
+name = "carbon_credit"
+version = "0.1.0"
+edition = "2021"
+description = "SEP-41 compliant carbon credit token contract for StellarKraal"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { version = "22.0.0", features = ["alloc"] }
+
+[dev-dependencies]
+soroban-sdk = { version = "22.0.0", features = ["testutils"] }
+carbon_registry = { path = "../carbon_registry" }
+
+[features]
+testutils = ["soroban-sdk/testutils"]

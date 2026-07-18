@@ -104,3 +104,26 @@ model IdempotencyKey {
   @@index([key])
   @@index([expiresAt])
 }
+
+// ─── Price Events ─────────────────────────────────────────────────────────────
+
+/// Records on-chain trade, oracle update, and retire events for a carbon credit.
+/// Used by the real-time price chart SSE endpoint (Issue #25).
+model PriceEvent {
+  id        String   @id @default(cuid())
+  creditId  String            // carbon credit identifier (on-chain asset ID)
+  /// PriceEventType: trade | oracle_update | retire
+  type      String
+  priceUSDC Float             // price in USDC at time of event
+  volume    Float?            // units traded (trade events only)
+  txHash    String?           // Soroban transaction hash
+  ledger    Int?              // on-chain ledger sequence
+  timestamp DateTime          // when the event was recorded on-chain
+
+  createdAt DateTime @default(now())
+
+  @@index([creditId])
+  @@index([creditId, timestamp])
+  @@index([type])
+  @@index([timestamp])
+}

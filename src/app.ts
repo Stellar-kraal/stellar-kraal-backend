@@ -17,6 +17,7 @@ import { logger } from './lib/logger';
 import authRoutes from './routes/auth.routes';
 import livestockRoutes from './routes/livestock.routes';
 import loanRoutes from './routes/loans.routes';
+import priceEventsRoutes from './routes/price-events.routes';
 
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 
@@ -106,6 +107,7 @@ export function createApp(): Application {
   app.use('/api/auth', authLimiter, authRoutes);
   app.use('/api/livestock', livestockRoutes);
   app.use('/api/loans', loanRoutes);
+  app.use('/api/events', priceEventsRoutes);
 
   // ── 404 + Global error handler ────────────────────────────────────────────
   app.use(notFoundHandler);

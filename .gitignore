@@ -33,3 +33,7 @@ Thumbs.db
 
 # Coverage
 coverage/
+
+# Load test
+.env.load
+load-results/

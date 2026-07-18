@@ -1,0 +1,199 @@
+##
+# .github/workflows/load-test.yml
+#
+# CI Smoke Load Test — runs on every PR as a required check.
+#
+# Smoke run: 10 VUs, 30 seconds, threshold p95 < 2 000 ms.
+# If the threshold is breached, k6 exits with code 1 and the check fails.
+#
+# Full baseline (manual dispatch only):
+#   Runs all 6 scenarios and uploads the JSON results as an artifact.
+#
+# Secrets required:
+#   LOAD_FARMER_TOKEN    — long-lived JWT for a FARMER user (see generate-tokens.mjs)
+#   JWT_SECRET           — used to spin up the backend
+#   LOAD_CONTRACT_ID     — Soroban contract ID (C...) for the test environment
+#   LOAD_SERVER_SECRET_KEY — Stellar secret key for the oracle server account
+#
+# Variables (optional):
+#   LOAD_P95_THRESHOLD_MS — default 2000
+#   LOAD_BASE_URL         — default http://localhost:3001
+##
+
+name: Load Test — Smoke (PR gate) & Baseline (manual)
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      run_full_baseline:
+        description: 'Run full 6-scenario baseline (not just smoke)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+concurrency:
+  group: load-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke-load-test:
+    name: Smoke Load Test (10 VUs / 30 s)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      NODE_ENV: test
+      PORT: 3001
+      FRONTEND_URL: http://localhost:3000
+      DATABASE_URL: file:./load-test.db
+      STELLAR_NETWORK: testnet
+      RPC_URL: https://soroban-testnet.stellar.org
+      POLL_INTERVAL_MS: 60000
+      START_LEDGER: '0'
+      LOG_LEVEL: warn
+      BASE_URL: http://localhost:3001
+      P95_THRESHOLD_MS: ${{ vars.LOAD_P95_THRESHOLD_MS || '2000' }}
+
+    steps:
+      # ── 1. Checkout ───────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Node.js ────────────────────────────────────────────────────────────
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # ── 3. Install k6 ─────────────────────────────────────────────────────────
+      - name: Install k6
+        run: |
+          sudo gpg -k
+          sudo gpg --no-default-keyring \
+               --keyring /usr/share/keyrings/k6-archive-keyring.gpg \
+               --keyserver hkp://keyserver.ubuntu.com:80 \
+               --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" \
+            | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update -qq
+          sudo apt-get install -qq k6
+
+      # ── 4. Install dependencies ───────────────────────────────────────────────
+      - name: Install Node dependencies
+        run: npm ci
+
+      # ── 5. Generate Prisma client & build ─────────────────────────────────────
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Build TypeScript
+        run: npm run build
+
+      # ── 6. Configure secrets ──────────────────────────────────────────────────
+      - name: Configure secrets
+        env:
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          CONTRACT_ID: ${{ secrets.LOAD_CONTRACT_ID }}
+          SERVER_SECRET_KEY: ${{ secrets.LOAD_SERVER_SECRET_KEY }}
+        run: |
+          echo "JWT_SECRET=${JWT_SECRET}"          >> $GITHUB_ENV
+          echo "CONTRACT_ID=${CONTRACT_ID}"        >> $GITHUB_ENV
+          echo "SERVER_SECRET_KEY=${SERVER_SECRET_KEY}" >> $GITHUB_ENV
+
+      # ── 7. Start backend ──────────────────────────────────────────────────────
+      - name: Start backend
+        run: node dist/server.js &
+        env:
+          DATABASE_URL: file:./load-test.db
+
+      # ── 8. Wait for backend readiness ─────────────────────────────────────────
+      - name: Wait for backend
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3001/health > /dev/null 2>&1; then
+              echo "Backend ready after ${i} attempts"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Backend did not start in time" && exit 1
+
+      # ── 9. Seed load test data ─────────────────────────────────────────────────
+      - name: Seed test data
+        run: node src/tests/load/scripts/seed-load-data.mjs --livestock=50 --loans=20
+        env:
+          DATABASE_URL: file:./load-test.db
+
+      # ── 10. Generate tokens ────────────────────────────────────────────────────
+      # For the smoke test we use a pre-issued long-lived token from secrets.
+      # If LOAD_FARMER_TOKEN is not set, the authenticated scenarios are skipped.
+      - name: Export load tokens
+        env:
+          LOAD_FARMER_TOKEN: ${{ secrets.LOAD_FARMER_TOKEN }}
+        run: |
+          echo "FARMER_TOKEN=${LOAD_FARMER_TOKEN}" >> $GITHUB_ENV
+
+      # ── 11. Create output directory ────────────────────────────────────────────
+      - name: Create load-results directory
+        run: mkdir -p load-results
+
+      # ── 12. Run smoke load test ────────────────────────────────────────────────
+      - name: Run smoke load test
+        run: |
+          k6 run \
+            --out json=load-results/smoke.json \
+            -e BASE_URL=${{ env.BASE_URL }} \
+            -e FARMER_TOKEN=${{ env.FARMER_TOKEN }} \
+            -e SMOKE_VUS=10 \
+            -e SMOKE_DURATION=30s \
+            -e P95_THRESHOLD_MS=${{ env.P95_THRESHOLD_MS }} \
+            -e ERROR_RATE_THRESHOLD=0.05 \
+            src/tests/load/smoke/ci-smoke.js
+
+      # ── 13. Full baseline (manual dispatch only) ───────────────────────────────
+      - name: Run full baseline scenarios
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_full_baseline == 'true'
+        run: |
+          for scenario in 01 02 03 04 05 06; do
+            FILE=$(ls src/tests/load/scenarios/${scenario}-*.js 2>/dev/null | head -1)
+            if [ -n "$FILE" ]; then
+              echo "Running $FILE …"
+              k6 run \
+                --out json=load-results/scenario-${scenario}.json \
+                -e BASE_URL=${{ env.BASE_URL }} \
+                -e FARMER_TOKEN=${{ env.FARMER_TOKEN }} \
+                -e P95_THRESHOLD_MS=${{ env.P95_THRESHOLD_MS }} \
+                "$FILE" || echo "Scenario $scenario completed with threshold failures (non-fatal in full run)"
+            fi
+          done
+
+      # ── 14. Upload results artifact ────────────────────────────────────────────
+      - name: Upload load test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-test-results-${{ github.run_number }}
+          path: load-results/
+          retention-days: 30
+
+      # ── 15. Post summary to job ────────────────────────────────────────────────
+      - name: Post summary
+        if: always()
+        run: |
+          echo "## Load Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| VUs (smoke) | 10 |" >> $GITHUB_STEP_SUMMARY
+          echo "| Duration    | 30s |" >> $GITHUB_STEP_SUMMARY
+          echo "| p95 threshold | ${P95_THRESHOLD_MS}ms |" >> $GITHUB_STEP_SUMMARY
+          echo "| Error rate threshold | 5% |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Detailed results uploaded as artifact \`load-test-results-${{ github.run_number }}\`." >> $GITHUB_STEP_SUMMARY

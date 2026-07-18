@@ -18,8 +18,16 @@
  */
 
 import { createLogger } from '../lib/logger';
+import { median, rejectOutliers } from './oracle-aggregation';
 
 const log = createLogger('appraisal');
+
+/**
+ * Max % deviation from the median an oracle price may have before it is
+ * excluded as an outlier (ADR-006). Configurable so operators can tighten
+ * or loosen manipulation resistance without a code change.
+ */
+const ORACLE_MAX_DEVIATION_PCT = Number(process.env.ORACLE_MAX_DEVIATION_PCT ?? 15);
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -170,8 +178,11 @@ const marketFeedOracle: OracleAdapter = {
 const ORACLES: OracleAdapter[] = [internalOracle, marketFeedOracle];
 
 /**
- * Aggregate oracle prices using median (ADR-006).
- * Null responses (unavailable feeds) are excluded.
+ * Aggregate oracle prices using median with outlier rejection (ADR-006).
+ * Null responses (unavailable feeds) are excluded. Any responding price that
+ * deviates from the group median by more than ORACLE_MAX_DEVIATION_PCT is
+ * dropped before the final median is computed, so a single manipulated or
+ * malfunctioning feed cannot skew the aggregate (see oracle-aggregation.ts).
  */
 async function aggregatedPricePerKg(
   type: AnimalType,
@@ -196,12 +207,18 @@ async function aggregatedPricePerKg(
     return base * premium;
   }
 
-  // Median
-  const sorted = [...prices].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0
-    ? (sorted[mid - 1]! + sorted[mid]!) / 2
-    : sorted[mid]!;
+  const filtered = rejectOutliers(prices, ORACLE_MAX_DEVIATION_PCT);
+  if (filtered.length < prices.length) {
+    log.warn('Rejected outlier oracle price(s)', {
+      type,
+      breed,
+      allPrices: prices,
+      keptPrices: filtered,
+      maxDeviationPct: ORACLE_MAX_DEVIATION_PCT,
+    });
+  }
+
+  return median(filtered);
 }
 
 // ─── Main appraisal function ──────────────────────────────────────────────────

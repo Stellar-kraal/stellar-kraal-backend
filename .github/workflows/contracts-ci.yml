@@ -122,7 +122,7 @@ jobs:
       - name: Check for size-override label
         id: label
         run: |
-          echo 'has_override=${{ contains(github.event.pull_request.labels.*.name, "contract-size-override") }}' >> "$GITHUB_OUTPUT"
+          echo 'has_override=${{ contains(github.event.pull_request.labels.*.name, 'contract-size-override') }}' >> "$GITHUB_OUTPUT"
 
       - name: Compare against baseline
         id: gate

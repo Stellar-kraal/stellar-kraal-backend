@@ -33,3 +33,8 @@ Thumbs.db
 
 # Coverage
 coverage/
+
+# Oracle bridge local runtime data (state/backups written at runtime,
+# never checked in — the whole point is these are recoverable from a
+# real backup location, not from git)
+oracle-bridge/data/

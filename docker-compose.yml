@@ -1,0 +1,80 @@
+# docker-compose.yml
+#
+# Oracle bridge primary/standby setup for disaster recovery.
+#
+# - oracle-bridge-primary: the active submitter. Periodically snapshots its
+#   state (config + a secret *reference*, never a raw key) to the shared
+#   oracle-bridge-backups volume.
+# - oracle-bridge-standby: stays warm by re-syncing from the same shared
+#   backup volume. Does not submit anything until explicitly promoted
+#   (`docker compose exec oracle-bridge-standby npm run promote`).
+#
+# All secrets are parameterized via environment variables (see
+# oracle-bridge/.env.example) — nothing here is hardcoded. Local/dev/CI use
+# SECRETS_PROVIDER=mock with a mock:// reference; production points
+# ORACLE_BRIDGE_SECRETS_PROVIDER at a real provider and
+# ORACLE_BRIDGE_SIGNING_KEY_SECRET_REF at that provider's real reference
+# (e.g. an AWS Secrets Manager ARN) — see docs/ops/oracle-bridge-dr.md.
+
+services:
+  oracle-bridge-primary:
+    build:
+      context: ./oracle-bridge
+    environment:
+      - BRIDGE_ROLE=primary
+      - NETWORK=${ORACLE_BRIDGE_NETWORK:-testnet}
+      - RPC_URL=${ORACLE_BRIDGE_RPC_URL:-https://soroban-testnet.stellar.org}
+      - CONTRACT_ID=${ORACLE_BRIDGE_CONTRACT_ID:?ORACLE_BRIDGE_CONTRACT_ID must be set}
+      - SIGNING_KEY_SECRET_REF=${ORACLE_BRIDGE_SIGNING_KEY_SECRET_REF:?ORACLE_BRIDGE_SIGNING_KEY_SECRET_REF must be set}
+      - SECRETS_PROVIDER=${ORACLE_BRIDGE_SECRETS_PROVIDER:-mock}
+      - DRY_RUN=${ORACLE_BRIDGE_DRY_RUN:-true}
+      - STATE_DIR=/data/state
+      - BACKUP_DIR=/data/backups
+      - BACKUP_INTERVAL_MS=${ORACLE_BRIDGE_BACKUP_INTERVAL_MS:-30000}
+      - SUBMIT_INTERVAL_MS=${ORACLE_BRIDGE_SUBMIT_INTERVAL_MS:-60000}
+      - PORT=4000
+    ports:
+      - "4000:4000"
+    volumes:
+      - oracle-bridge-primary-state:/data/state
+      - oracle-bridge-backups:/data/backups
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:4000/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  oracle-bridge-standby:
+    build:
+      context: ./oracle-bridge
+    environment:
+      - BRIDGE_ROLE=standby
+      - NETWORK=${ORACLE_BRIDGE_NETWORK:-testnet}
+      - RPC_URL=${ORACLE_BRIDGE_RPC_URL:-https://soroban-testnet.stellar.org}
+      - CONTRACT_ID=${ORACLE_BRIDGE_CONTRACT_ID:?ORACLE_BRIDGE_CONTRACT_ID must be set}
+      - SIGNING_KEY_SECRET_REF=${ORACLE_BRIDGE_SIGNING_KEY_SECRET_REF:?ORACLE_BRIDGE_SIGNING_KEY_SECRET_REF must be set}
+      - SECRETS_PROVIDER=${ORACLE_BRIDGE_SECRETS_PROVIDER:-mock}
+      - DRY_RUN=${ORACLE_BRIDGE_DRY_RUN:-true}
+      - STATE_DIR=/data/state
+      - BACKUP_DIR=/data/backups
+      - BACKUP_INTERVAL_MS=${ORACLE_BRIDGE_BACKUP_INTERVAL_MS:-30000}
+      - PORT=4000
+    ports:
+      - "4001:4000"
+    volumes:
+      - oracle-bridge-standby-state:/data/state
+      - oracle-bridge-backups:/data/backups
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:4000/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  oracle-bridge-primary-state:
+  oracle-bridge-standby-state:
+  oracle-bridge-backups:

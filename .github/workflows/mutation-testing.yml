@@ -1,0 +1,185 @@
+##
+# .github/workflows/mutation-testing.yml
+#
+# Mutation testing for the Soroban contract crates under contracts/, using
+# cargo-mutants. See docs/testing/mutation-scores.md for how to interpret
+# the results and contracts/README.md for how a new crate gets picked up.
+#
+# Status: SCAFFOLDING. No contract crates exist in this repo yet (see
+# contracts/README.md), so the "discover" job below currently finds zero
+# crates and every downstream job is skipped. This workflow activates
+# automatically once a crate lands under contracts/<crate-name>/.
+#
+# Triggers:
+#   - Pull requests targeting main that touch contracts/** (so a new
+#     surviving mutant in a security-critical path can block the merge via
+#     branch protection required-status-checks)
+#   - Push to main that touches contracts/** (records the post-merge
+#     baseline and posts a commit status on the merge commit)
+#   - Manual dispatch
+#
+# Per crate, this workflow:
+#   1. Runs `cargo mutants` and computes a mutation score from its
+#      caught/missed/timeout/unviable output (scripts/mutation-testing/score.sh)
+#   2. Checks whether any surviving mutant falls in a security-critical path
+#      (docs/testing/security-critical-paths.json) and isn't already triaged
+#      in the baseline allowlist (docs/testing/mutation-baseline.json)
+#      (scripts/mutation-testing/check-survivors.sh) — fails the job if so
+#   3. Posts a commit status (context "mutation-testing / <crate>") with the
+#      score
+#   4. Uploads the full cargo-mutants report as a build artifact
+##
+
+name: Mutation Testing
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'contracts/**'
+      - '.github/workflows/mutation-testing.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'contracts/**'
+      - '.github/workflows/mutation-testing.yml'
+  workflow_dispatch: {}
+
+concurrency:
+  group: mutation-testing-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── 1. Discover contract crates ─────────────────────────────────────────
+  discover:
+    name: Discover contract crates
+    runs-on: ubuntu-latest
+    outputs:
+      crates: ${{ steps.find.outputs.crates }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Find crates under contracts/
+        id: find
+        run: |
+          crates=$(find contracts -mindepth 2 -maxdepth 2 -name Cargo.toml \
+            -exec dirname {} \; | xargs -n1 basename 2>/dev/null | sort | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "crates=$crates" >> "$GITHUB_OUTPUT"
+          echo "Discovered crates: $crates"
+
+  # ── 2. Run cargo-mutants per crate ──────────────────────────────────────
+  mutation-test:
+    name: cargo-mutants (${{ matrix.crate }})
+    needs: discover
+    if: needs.discover.outputs.crates != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        crate: ${{ fromJson(needs.discover.outputs.crates) }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-mutants-${{ matrix.crate }}-${{ hashFiles(format('contracts/{0}/Cargo.lock', matrix.crate)) }}
+          restore-keys: |
+            cargo-mutants-${{ matrix.crate }}-
+
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@cargo-mutants
+
+      - name: Run cargo-mutants
+        working-directory: contracts/${{ matrix.crate }}
+        run: |
+          cargo mutants --no-shuffle --output mutants.out || true
+          # cargo-mutants exits non-zero when any mutant survives — that's
+          # expected and handled by the score/survivor-check steps below,
+          # not a workflow infrastructure failure.
+
+      - name: Compute mutation score
+        id: score
+        run: |
+          scripts/mutation-testing/score.sh "contracts/${{ matrix.crate }}/mutants.out" | tee "$GITHUB_OUTPUT"
+
+      - name: Post score to job summary
+        run: |
+          {
+            echo "### Mutation score — ${{ matrix.crate }}"
+            echo ""
+            echo "| caught | missed | timeout | unviable | score |"
+            echo "|---|---|---|---|---|"
+            echo "| ${{ steps.score.outputs.caught }} | ${{ steps.score.outputs.missed }} | ${{ steps.score.outputs.timeout }} | ${{ steps.score.outputs.unviable }} | ${{ steps.score.outputs.score }}% |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post commit status
+        uses: actions/github-script@v7
+        if: always() && steps.score.outputs.score != ''
+        with:
+          script: |
+            const sha = context.payload.pull_request?.head?.sha ?? context.sha;
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha,
+              state: 'success',
+              context: 'mutation-testing / ${{ matrix.crate }}',
+              description: 'Mutation score: ${{ steps.score.outputs.score }}%',
+            });
+
+      - name: Check for new survivors in security-critical paths
+        run: |
+          scripts/mutation-testing/check-survivors.sh \
+            "${{ matrix.crate }}" \
+            "contracts/${{ matrix.crate }}/mutants.out" \
+            "docs/testing/security-critical-paths.json" \
+            "docs/testing/mutation-baseline.json"
+
+      - name: Mark commit status as failed on blocking survivors
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sha = context.payload.pull_request?.head?.sha ?? context.sha;
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha,
+              state: 'failure',
+              context: 'mutation-testing / ${{ matrix.crate }}',
+              description: 'New surviving mutant in a security-critical path',
+            });
+
+      - name: Upload cargo-mutants report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-out-${{ matrix.crate }}-${{ github.run_number }}
+          path: contracts/${{ matrix.crate }}/mutants.out
+          retention-days: 30
+
+  # ── 3. No crates yet — friendly no-op summary ───────────────────────────
+  no-crates:
+    name: No contract crates found
+    needs: discover
+    if: needs.discover.outputs.crates == '[]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Explain no-op
+        run: |
+          echo "## Mutation Testing" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "No contract crates found under \`contracts/*/Cargo.toml\` — this workflow is scaffolding until Issue #31's contract crates land. See \`contracts/README.md\`." >> "$GITHUB_STEP_SUMMARY"

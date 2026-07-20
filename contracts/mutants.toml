@@ -1,0 +1,22 @@
+# cargo-mutants configuration
+#
+# Applies to whichever crate(s) cargo-mutants is invoked against under
+# contracts/. See https://mutants.rs/config.html for the full option list.
+#
+# This file is a placeholder until real contract crates exist under
+# contracts/<crate-name>/ — see contracts/README.md.
+
+# Don't bother mutating generated/test-only code or examples.
+exclude_globs = [
+    "**/tests/**",
+    "**/*_test.rs",
+    "**/examples/**",
+]
+
+# Soroban contract calls can be slow to build/link; give mutants room
+# before declaring a timeout (multiplier applied on top of the baseline
+# unmutated build+test time cargo-mutants measures automatically).
+minimum_test_timeout = 60
+
+# Fail fast is off by default so a single crashy mutant doesn't hide the
+# rest of the report; CI computes the score from the full run.

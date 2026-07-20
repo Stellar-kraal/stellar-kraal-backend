@@ -1,0 +1,5 @@
+{
+  "$schema": "./security-critical-paths.schema.json",
+  "description": "Per-crate glob patterns (relative to contracts/<crate>/src/) that the mutation-testing CI workflow treats as security-critical: authorization checks, arithmetic on balances/amounts, and state-machine transitions. A surviving mutant whose file matches one of these globs blocks the merge unless it is already recorded in mutation-baseline.json. Empty until real contract crates exist under contracts/ — see contracts/README.md for onboarding steps.",
+  "contracts": {}
+}

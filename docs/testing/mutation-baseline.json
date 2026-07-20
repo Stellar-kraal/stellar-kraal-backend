@@ -1,0 +1,5 @@
+{
+  "$schema": "./mutation-baseline.schema.json",
+  "description": "Allowlist of accepted surviving mutants, keyed by contract crate. Each entry is a triaged survivor that CI will not fail the build on. New surviving mutants in security-critical paths (see security-critical-paths.yml) that are NOT listed here block the merge. Add an entry only after a maintainer has reviewed the survivor and decided it's an acceptable gap (e.g. genuinely equivalent mutant) or filed a follow-up to kill it.",
+  "contracts": {}
+}

@@ -19,7 +19,10 @@
     "db:generate": "prisma generate",
     "db:studio": "prisma studio",
     "db:seed": "ts-node prisma/seed.ts",
-    "db:reset": "prisma migrate reset --force"
+    "db:reset": "prisma migrate reset --force",
+    "monitor": "ts-node-dev --respawn --transpile-only --exit-child src/monitoring/index.ts",
+    "monitor:build": "tsc --project monitoring/tsconfig.json",
+    "monitor:start": "node dist/monitoring/index.js"
   },
   "dependencies": {
     "@prisma/client": "5.22.0",

@@ -20,3 +20,6 @@ process.env['POLL_INTERVAL_MS'] = '60000';
 process.env['START_LEDGER'] = '0';
 process.env['LOG_LEVEL'] = 'silent';
 process.env['PORT'] = '3002';
+
+// ── Monitoring service (src/monitoring/config.ts) ──────────────────────────
+process.env['WEBHOOK_URL'] = 'https://hooks.example.test/webhook';

@@ -14,6 +14,7 @@
     "test:coverage": "jest --runInBand --forceExit --coverage",
     "test:watch": "jest --watch",
     "test:e2e": "jest --config jest.e2e.config.ts --runInBand --forceExit",
+    "test:chaos": "jest --config jest.chaos.config.ts --runInBand --forceExit",
     "db:migrate": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
     "db:generate": "prisma generate",

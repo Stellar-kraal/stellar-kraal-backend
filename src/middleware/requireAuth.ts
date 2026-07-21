@@ -10,10 +10,32 @@
 
 import { Request, Response, NextFunction } from 'express';
 import { verifyJwt, TokenPayload } from '../services/auth.service';
+import { SESSION_COOKIE_NAME } from '../lib/authCookie';
 import { createLogger } from '../lib/logger';
 import { Role } from '../types/domain';
 
 const log = createLogger('auth-middleware');
+
+/**
+ * Extract the session JWT from the request.
+ *
+ * Prefers the HttpOnly session cookie (browser sessions — not reachable from
+ * JS, so XSS can't steal it). Falls back to the `Authorization: Bearer` header
+ * for non-browser API clients (CLI, server-to-server, tests).
+ */
+function extractToken(req: Request): string | null {
+  const cookieToken = req.cookies?.[SESSION_COOKIE_NAME];
+  if (typeof cookieToken === 'string' && cookieToken.length > 0) {
+    return cookieToken;
+  }
+
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    return authHeader.slice(7); // remove "Bearer "
+  }
+
+  return null;
+}
 
 // Extend Express Request to carry the verified user
 declare global {
@@ -34,14 +56,12 @@ export function requireAuth(
   res: Response,
   next: NextFunction,
 ): void {
-  const authHeader = req.headers.authorization;
+  const token = extractToken(req);
 
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'Missing or malformed Authorization header' });
+  if (!token) {
+    res.status(401).json({ error: 'Missing session cookie or Authorization header' });
     return;
   }
-
-  const token = authHeader.slice(7); // remove "Bearer "
 
   try {
     const payload = verifyJwt(token);

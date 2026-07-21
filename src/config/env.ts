@@ -74,6 +74,13 @@ export const env = {
 
   // ── Logging ──────────────────────────────────────────────────────────────
   LOG_LEVEL: optionalEnv('LOG_LEVEL', 'info'),
+
+  // ── Bulk Retirement ──────────────────────────────────────────────────────
+  /** Maximum number of loans (credits) allowed in a single bulk retirement request */
+  BULK_RETIREMENT_MAX_BATCH_SIZE: requirePositiveInt('BULK_RETIREMENT_MAX_BATCH_SIZE', 100),
+
+  /** Maximum number of retire_loan operations packed into a single Soroban transaction */
+  SOROBAN_MAX_OPS_PER_TX: requirePositiveInt('SOROBAN_MAX_OPS_PER_TX', 20),
 } as const;
 
 // Validate SERVER_SECRET_KEY starts with 'S' (Stellar secret key prefix)

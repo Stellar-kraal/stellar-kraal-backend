@@ -230,3 +230,65 @@ describe('PATCH /api/auth/me', () => {
     expect(res.status).toBe(401);
   });
 });
+
+// ─── Cookie-based session ─────────────────────────────────────────────────────
+
+describe('HttpOnly cookie session', () => {
+  it('authenticates a request using the session cookie (no Authorization header)', async () => {
+    const user = await prisma.user.create({
+      data: { publicKey: Keypair.random().publicKey(), role: 'FARMER' },
+    });
+    const token = issueJwt({
+      sub: user.id,
+      publicKey: user.publicKey,
+      role: user.role,
+    });
+
+    const res = await request(app)
+      .get('/api/auth/me')
+      .set('Cookie', `sk_session=${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.user.id).toBe(user.id);
+  });
+
+  it('prefers a valid cookie over a malformed Authorization header', async () => {
+    const user = await prisma.user.create({
+      data: { publicKey: Keypair.random().publicKey(), role: 'FARMER' },
+    });
+    const token = issueJwt({
+      sub: user.id,
+      publicKey: user.publicKey,
+      role: user.role,
+    });
+
+    const res = await request(app)
+      .get('/api/auth/me')
+      .set('Cookie', `sk_session=${token}`)
+      .set('Authorization', 'Bearer not.a.valid.token');
+
+    expect(res.status).toBe(200);
+    expect(res.body.user.id).toBe(user.id);
+  });
+});
+
+// ─── POST /api/auth/logout ────────────────────────────────────────────────────
+
+describe('POST /api/auth/logout', () => {
+  it('clears the session cookie', async () => {
+    const res = await request(app).post('/api/auth/logout');
+
+    expect(res.status).toBe(200);
+    const cookies = res.headers['set-cookie'] as unknown as string[];
+    const cleared = cookies.find((c) => c.startsWith('sk_session='));
+    expect(cleared).toBeDefined();
+    // Cleared cookies carry an expiry in the past / empty value
+    expect(cleared!.toLowerCase()).toMatch(/expires=thu, 01 jan 1970|max-age=0/);
+  });
+
+  it('is idempotent when no session exists', async () => {
+    const res = await request(app).post('/api/auth/logout');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('message');
+  });
+});

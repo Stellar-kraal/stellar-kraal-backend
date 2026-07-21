@@ -26,6 +26,21 @@ function optionalEnv(key: string, defaultValue: string): string {
   return value?.trim() || defaultValue;
 }
 
+function optionalBool(key: string, defaultValue: boolean): boolean {
+  const value = process.env[key];
+  if (value === undefined || value.trim() === '') return defaultValue;
+  return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
+}
+
+type SameSite = 'lax' | 'strict' | 'none';
+
+function optionalSameSite(key: string, defaultValue: SameSite): SameSite {
+  const value = process.env[key]?.trim().toLowerCase();
+  if (!value) return defaultValue;
+  if (value === 'lax' || value === 'strict' || value === 'none') return value;
+  throw new Error(`Environment variable ${key} must be one of lax|strict|none, got: "${value}"`);
+}
+
 function requirePositiveInt(key: string, defaultValue: number): number {
   const raw = process.env[key];
   if (raw === undefined || raw === '') return defaultValue;
@@ -53,6 +68,21 @@ export const env = {
   // ── JWT ──────────────────────────────────────────────────────────────────
   JWT_SECRET: requireEnv('JWT_SECRET'),
   JWT_EXPIRES_IN: optionalEnv('JWT_EXPIRES_IN', '24h'),
+
+  // ── Session cookie ────────────────────────────────────────────────────────
+  /**
+   * When true the session cookie carries the `Secure` attribute (HTTPS only).
+   * Defaults to true in production, false otherwise so local HTTP dev works.
+   */
+  COOKIE_SECURE: optionalBool('COOKIE_SECURE', process.env.NODE_ENV === 'production'),
+  /**
+   * SameSite policy for the session cookie. `lax` is a safe default that still
+   * mitigates CSRF. Use `none` (requires COOKIE_SECURE=true) only when the
+   * frontend is served from a different site than the API.
+   */
+  COOKIE_SAME_SITE: optionalSameSite('COOKIE_SAME_SITE', 'lax'),
+  /** Optional cookie domain scope, e.g. ".stellarkraal.app". Empty = host-only. */
+  COOKIE_DOMAIN: optionalEnv('COOKIE_DOMAIN', ''),
 
   // ── Stellar / Soroban ────────────────────────────────────────────────────
   STELLAR_NETWORK: optionalEnv('STELLAR_NETWORK', 'testnet') as Network,

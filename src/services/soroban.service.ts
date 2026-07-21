@@ -80,13 +80,34 @@ export async function invokeContract(
 
   const contract = new Contract(env.CONTRACT_ID);
 
+  // Fetch current ledger for ledger-bound enforcement (Surface 4 replay mitigation)
+  // Transactions are only valid within a ~100-ledger window (~8 minutes at 5 s/ledger).
+  // This prevents delayed or replayed transaction submission.
+  const LEDGER_BOUND_WINDOW = 100;
+  let minLedger: number | undefined;
+  let maxLedger: number | undefined;
+  try {
+    const latestLedger = await rpc.getLatestLedger();
+    minLedger = latestLedger.sequence;
+    maxLedger = latestLedger.sequence + LEDGER_BOUND_WINDOW;
+    log.debug('Applying ledger bounds', { minLedger, maxLedger, functionName });
+  } catch (err) {
+    log.warn('Could not fetch latest ledger for bounds; proceeding without ledger bounds', { err });
+  }
+
   // Build the transaction
-  let txBuilder = new TransactionBuilder(account, {
+  const txBuilder = new TransactionBuilder(account, {
     fee: BASE_FEE,
     networkPassphrase: getNetworkPassphrase(),
   })
     .addOperation(contract.call(functionName, ...args))
     .setTimeout(30);
+
+  // Apply ledger bounds when available (high-value replay mitigation).
+  // Prevents delayed or replayed transaction submission outside the valid window.
+  if (minLedger !== undefined && maxLedger !== undefined) {
+    txBuilder.setLedgerbounds(minLedger, maxLedger);
+  }
 
   const builtTx = txBuilder.build();
 
@@ -345,6 +366,29 @@ async function handleLoanCreated(event: SorobanEvent): Promise<void> {
     const durationDays = Number(data['duration_days']);
     const livestockId = String(data['collateral_id']);
 
+    // Surface 5 replay mitigation: skip events that are not newer than the last
+    // processed event ledger for this loan. Prevents replayed events from
+    // rolling back terminal states (e.g. LIQUIDATED → ACTIVE).
+    const existingLoan = await prisma.loan.findUnique({ where: { contractLoanId } });
+    if (existingLoan && existingLoan.lastEventLedger !== null &&
+        event.ledger <= existingLoan.lastEventLedger) {
+      log.debug('Skipping replayed LoanCreated event (ledger not newer)', {
+        contractLoanId,
+        eventLedger: event.ledger,
+        lastEventLedger: existingLoan.lastEventLedger,
+      });
+      return;
+    }
+
+    // Do not allow LoanCreated to override a terminal status
+    if (existingLoan && ['REPAID', 'LIQUIDATED', 'DEFAULTED'].includes(existingLoan.status)) {
+      log.debug('Skipping LoanCreated: loan already in terminal state', {
+        contractLoanId,
+        status: existingLoan.status,
+      });
+      return;
+    }
+
     // Find the borrower user (they must already be registered)
     const borrower = await prisma.user.findUnique({
       where: { publicKey: borrowerKey },
@@ -397,6 +441,19 @@ async function handleLoanStatusChange(
   try {
     const data = scValToNative(event.value) as Record<string, unknown>;
     const contractLoanId = String(data['loan_id']);
+
+    // Surface 5 replay mitigation: discard events with ledger ≤ lastEventLedger
+    const existingLoan = await prisma.loan.findUnique({ where: { contractLoanId } });
+    if (existingLoan && existingLoan.lastEventLedger !== null &&
+        event.ledger <= existingLoan.lastEventLedger) {
+      log.debug('Skipping replayed status-change event (ledger not newer)', {
+        contractLoanId,
+        eventLedger: event.ledger,
+        lastEventLedger: existingLoan.lastEventLedger,
+        status,
+      });
+      return;
+    }
 
     const updateData: Record<string, unknown> = {
       status: status === 'REPAID' ? LoanStatus.REPAID : LoanStatus.LIQUIDATED,

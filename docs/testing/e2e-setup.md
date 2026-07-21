@@ -51,7 +51,9 @@ Edit `.env.e2e` and fill in:
 
 | Variable | Where to get it |
 |---|---|
-| `E2E_SERVER_SECRET_KEY` | Must match `SERVER_SECRET_KEY` in your backend `.env`. Generate with `stellar keys generate --network testnet e2e-oracle` |
+| `E2E_AUTH_SERVER_SECRET_KEY` | Must match `AUTH_SERVER_SECRET_KEY` in your backend `.env` (SEP-10 signing) |
+| `E2E_ORACLE_SERVER_SECRET_KEY` | Must match `ORACLE_SERVER_SECRET_KEY` in your backend `.env` (On-chain submissions) |
+| `E2E_SERVER_SECRET_KEY` | (Legacy fallback) Oracle server secret key |
 | `E2E_CONTRACT_ID` | Your deployed testnet contract ID (starts with `C`) |
 | `JWT_SECRET` | Must match `JWT_SECRET` in your backend `.env` |
 

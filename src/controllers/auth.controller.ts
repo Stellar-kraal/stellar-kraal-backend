@@ -42,6 +42,10 @@ export async function getChallenge(
 
     res.json({ transaction });
   } catch (err) {
+    if (err instanceof Error && err.message === 'Invalid Stellar public key') {
+      res.status(400).json({ error: err.message });
+      return;
+    }
     next(err);
   }
 }

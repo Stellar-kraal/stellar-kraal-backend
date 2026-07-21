@@ -72,7 +72,7 @@ export async function invokeContract(
   functionName: string,
   args: xdr.ScVal[],
 ): Promise<string> {
-  const serverKeypair = Keypair.fromSecret(env.SERVER_SECRET_KEY);
+  const serverKeypair = Keypair.fromSecret(env.ORACLE_SERVER_SECRET_KEY);
   const rpc = getRpc();
 
   // Fetch the server account (for sequence number)
@@ -334,7 +334,7 @@ export async function getLoanState(
   contractLoanId: string,
 ): Promise<OnChainLoanState | null> {
   const rpc = getRpc();
-  const serverKeypair = Keypair.fromSecret(env.SERVER_SECRET_KEY);
+  const serverKeypair = Keypair.fromSecret(env.ORACLE_SERVER_SECRET_KEY);
   const account = await rpc.getAccount(serverKeypair.publicKey());
 
   const contract = new Contract(env.CONTRACT_ID);

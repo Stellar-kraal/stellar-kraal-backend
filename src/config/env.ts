@@ -90,10 +90,21 @@ export const env = {
   CONTRACT_ID: requireEnv('CONTRACT_ID'),
 
   /**
-   * Server-side Stellar secret key used to sign oracle transactions.
+   * Server-side Stellar secret key used exclusively for signing SEP-10 authentication challenges.
    * Must start with 'S' (Stellar secret format).
    */
-  SERVER_SECRET_KEY: requireEnv('SERVER_SECRET_KEY'),
+  AUTH_SERVER_SECRET_KEY: requireEnvWithFallback('AUTH_SERVER_SECRET_KEY', 'SERVER_SECRET_KEY'),
+
+  /**
+   * Server-side Stellar secret key used exclusively for submitting on-chain oracle/Soroban transactions.
+   * Must start with 'S' (Stellar secret format).
+   */
+  ORACLE_SERVER_SECRET_KEY: requireEnvWithFallback('ORACLE_SERVER_SECRET_KEY', 'SERVER_SECRET_KEY'),
+
+  /**
+   * Legacy server secret key (kept for backward compatibility; points to ORACLE_SERVER_SECRET_KEY).
+   */
+  SERVER_SECRET_KEY: requireEnvWithFallback('ORACLE_SERVER_SECRET_KEY', 'SERVER_SECRET_KEY'),
 
   // ── Oracle / Appraisal ───────────────────────────────────────────────────
   /** How often (ms) the event poller syncs on-chain Soroban events */
@@ -113,9 +124,14 @@ export const env = {
   SOROBAN_MAX_OPS_PER_TX: requirePositiveInt('SOROBAN_MAX_OPS_PER_TX', 20),
 } as const;
 
-// Validate SERVER_SECRET_KEY starts with 'S' (Stellar secret key prefix)
-if (!env.SERVER_SECRET_KEY.startsWith('S')) {
-  throw new Error('SERVER_SECRET_KEY must be a valid Stellar secret key starting with "S"');
+// Validate AUTH_SERVER_SECRET_KEY starts with 'S' (Stellar secret key prefix)
+if (!env.AUTH_SERVER_SECRET_KEY.startsWith('S')) {
+  throw new Error('AUTH_SERVER_SECRET_KEY must be a valid Stellar secret key starting with "S"');
+}
+
+// Validate ORACLE_SERVER_SECRET_KEY starts with 'S' (Stellar secret key prefix)
+if (!env.ORACLE_SERVER_SECRET_KEY.startsWith('S')) {
+  throw new Error('ORACLE_SERVER_SECRET_KEY must be a valid Stellar secret key starting with "S"');
 }
 
 export type Env = typeof env;

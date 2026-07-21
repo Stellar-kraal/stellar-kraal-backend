@@ -11,8 +11,10 @@ process.env['DATABASE_URL'] = 'file:./test.db';
 process.env['JWT_SECRET'] = 'test-jwt-secret-that-is-long-enough-for-testing-purposes-only';
 process.env['JWT_EXPIRES_IN'] = '1h';
 process.env['CONTRACT_ID'] = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM';
-// Valid Stellar secret key (testnet only — never used on mainnet)
-process.env['SERVER_SECRET_KEY'] = 'SBDUYVTILOG55EI4N4ICFUQ24KTZ2HXODDN5M5IVGSDACPYYCGPRXNZR';
+// Valid Stellar secret keys (testnet only — never used on mainnet)
+process.env['AUTH_SERVER_SECRET_KEY'] = 'SDFECHYSBJGAAABWHN2ILB4NYDCQBNWJUALWS3EW6CHP2MY4ODMR3DCN';
+process.env['ORACLE_SERVER_SECRET_KEY'] = 'SDANUWG4TWFQT52IBLDBSZGDVO6HIG72I7JO7VJTL5G44EMHPMJCHOOU';
+process.env['SERVER_SECRET_KEY'] = 'SDANUWG4TWFQT52IBLDBSZGDVO6HIG72I7JO7VJTL5G44EMHPMJCHOOU';
 process.env['STELLAR_NETWORK'] = 'testnet';
 process.env['RPC_URL'] = 'https://soroban-testnet.stellar.org';
 process.env['FRONTEND_URL'] = 'http://localhost:3000';

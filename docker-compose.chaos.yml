@@ -1,0 +1,92 @@
+version: '3.8'
+
+# ─── StellarKraal Chaos Engineering Test Environment ────────────────────────
+# Issue #32 — Chaos Engineering Suite with Toxiproxy
+#
+# Services:
+#   - backend       : The StellarKraal API under test
+#   - toxiproxy     : TCP proxy that injects network faults between backend
+#                     and downstream services (RPC, oracle/GEE API)
+#   - toxiproxy-cli : One-shot container to configure Toxiproxy proxies on startup
+#
+# Usage:
+#   docker compose -f docker-compose.chaos.yml up -d
+#   npm run test:chaos
+#   docker compose -f docker-compose.chaos.yml down
+
+services:
+  # ── StellarKraal Backend under test ────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.chaos
+    ports:
+      - "3002:3001"
+    environment:
+      NODE_ENV: test
+      PORT: 3001
+      DATABASE_URL: "file:./chaos-test.db"
+      JWT_SECRET: chaos-test-secret-key-do-not-use-in-prod
+      JWT_EXPIRES_IN: 1h
+      FRONTEND_URL: "http://localhost:3000"
+      # Route RPC calls through Toxiproxy
+      RPC_URL: "http://toxiproxy:18888"
+      # Route oracle/GEE API through Toxiproxy
+      ORACLE_API_URL: "http://toxiproxy:18889"
+      STELLAR_NETWORK: testnet
+      CONTRACT_ID: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+      SERVER_SECRET_KEY: "SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+      POLL_INTERVAL_MS: 5000
+      START_LEDGER: 1
+    depends_on:
+      toxiproxy:
+        condition: service_healthy
+    networks:
+      - chaos-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ── Toxiproxy — TCP fault injector ─────────────────────────────────────────
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    ports:
+      - "8474:8474"   # Toxiproxy management API
+      - "18888:18888" # Proxy for Soroban RPC
+      - "18889:18889" # Proxy for Oracle/GEE API
+    networks:
+      - chaos-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8474/proxies"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  # ── Toxiproxy configuration init ───────────────────────────────────────────
+  toxiproxy-setup:
+    image: curlimages/curl:8.5.0
+    depends_on:
+      toxiproxy:
+        condition: service_healthy
+    networks:
+      - chaos-net
+    command: >
+      sh -c "
+        echo 'Configuring Toxiproxy proxies...' &&
+        curl -sf -X POST http://toxiproxy:8474/proxies \
+          -H 'Content-Type: application/json' \
+          -d '{\"name\":\"stellar-rpc\",\"listen\":\"0.0.0.0:18888\",\"upstream\":\"soroban-testnet.stellar.org:443\",\"enabled\":true}' &&
+        curl -sf -X POST http://toxiproxy:8474/proxies \
+          -H 'Content-Type: application/json' \
+          -d '{\"name\":\"oracle-api\",\"listen\":\"0.0.0.0:18889\",\"upstream\":\"earthengine.googleapis.com:443\",\"enabled\":true}' &&
+        echo 'Toxiproxy proxies configured successfully.'
+      "
+    restart: on-failure
+
+networks:
+  chaos-net:
+    driver: bridge

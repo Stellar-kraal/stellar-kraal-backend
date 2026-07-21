@@ -1,0 +1,66 @@
+name: Oracle Bridge Quarterly DR Drill Reminder
+
+# Quarterly, 09:00 UTC on the 1st of Jan/Apr/Jul/Oct.
+on:
+  schedule:
+    - cron: "0 9 1 1,4,7,10 *"
+  workflow_dispatch: {}
+
+permissions:
+  issues: write
+
+jobs:
+  open-reminder-issue:
+    name: Open quarterly DR drill reminder issue
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine quarter label
+        id: quarter
+        run: |
+          MONTH=$(date -u +%m)
+          YEAR=$(date -u +%Y)
+          case "$MONTH" in
+            01) Q="Q1" ;;
+            04) Q="Q2" ;;
+            07) Q="Q3" ;;
+            10) Q="Q4" ;;
+            *) Q="ad-hoc" ;;
+          esac
+          echo "label=${Q} ${YEAR}" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure labels exist
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create "ops" --repo "${{ github.repository }}" --color "0e8a16" --force
+          gh label create "disaster-recovery" --repo "${{ github.repository }}" --color "b60205" --force
+
+      - name: Open issue
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          QUARTER_LABEL: ${{ steps.quarter.outputs.label }}
+        run: |
+          gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "Oracle Bridge DR Drill — ${QUARTER_LABEL}" \
+            --label "ops,disaster-recovery" \
+            --body "$(cat <<EOF
+          ## Quarterly Oracle Bridge DR Drill — ${QUARTER_LABEL}
+
+          It's time for the scheduled disaster-recovery drill for the oracle bridge, per \`docs/ops/oracle-bridge-dr.md\`.
+
+          ### Checklist
+
+          - [ ] Run the automated drill: \`docker compose build && ./oracle-bridge/scripts/drill.sh\`
+          - [ ] Confirm promotion completed within the 15-minute budget (the script asserts this and prints the measured time)
+          - [ ] If the automated drill fails, follow the manual procedure in \`docs/ops/oracle-bridge-dr.md\`
+          - [ ] Confirm the standby's backup/restore path still produces a functional instance: \`oracle-bridge/scripts/backup-restore-check.sh\`
+          - [ ] Review whether \`docs/ops/oracle-bridge-dr.md\` needs updates (changed infra, new failure modes discovered)
+          - [ ] Record the measured promotion time and drill outcome below, then close this issue
+
+          **Drill run by:** _(fill in)_
+          **Date:** _(fill in)_
+          **Measured promotion time:** _(fill in)_
+          **Outcome:** _(pass / fail — details)_
+          EOF
+          )"

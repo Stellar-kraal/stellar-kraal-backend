@@ -33,3 +33,7 @@ Thumbs.db
 
 # Coverage
 coverage/
+
+# Rust / Soroban contract build output (contracts/Cargo.lock IS committed)
+**/target/
+**/*.rs.bk

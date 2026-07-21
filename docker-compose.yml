@@ -1,0 +1,23 @@
+##
+# docker-compose.yml
+#
+# Currently defines the on-chain anomaly detection / monitoring service
+# (see docs/ops/anomaly-detection.md and monitoring/Dockerfile). The
+# backend API doesn't have a Dockerfile in this repository yet — add a
+# `backend` service here once one exists, matching the multi-service
+# layout described in README.md.
+##
+
+services:
+  monitoring:
+    build:
+      context: .
+      dockerfile: monitoring/Dockerfile
+    container_name: stellarkraal-monitoring
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+    ports:
+      - '${MONITOR_PORT:-3002}:${MONITOR_PORT:-3002}'

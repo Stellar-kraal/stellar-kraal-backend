@@ -1,0 +1,67 @@
+##
+# .github/workflows/unit-tests.yml
+#
+# Unit test workflow for StellarKraal, including the Hypothesis-equivalent
+# property-based test suite for the oracle aggregation layer (fast-check).
+#
+# Triggers:
+#   - Push to main
+#   - Pull requests targeting main
+#   - Manual dispatch, with an optional override for how many examples
+#     each property test runs (defaults to 500 — see FC_NUM_RUNS below)
+#
+# Closes #30
+##
+
+name: Unit Tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      property-test-examples:
+        description: 'Number of examples per property test (fast-check numRuns)'
+        required: false
+        default: '500'
+
+concurrency:
+  group: unit-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: Unit & Property Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      NODE_ENV: test
+      # Configurable example count for fast-check property tests (AC: default >= 500).
+      FC_NUM_RUNS: ${{ github.event.inputs.property-test-examples || '500' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Run unit & property tests with coverage
+        run: npm run test:coverage

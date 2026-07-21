@@ -81,6 +81,7 @@ const SUITE_TIMEOUT_MS = 8 * 60 * 1000; // 8 minutes total
 const STEP_TIMEOUT_MS = 90_000;          // 90 s per individual step
 
 describe('StellarKraal — full credit lifecycle E2E', () => {
+  jest.setTimeout(SUITE_TIMEOUT_MS);
   // Shared state accumulated across steps
   let farmerAccount: TestAccount;
   let investorAccount: TestAccount;
@@ -573,10 +574,7 @@ describe('StellarKraal — full credit lifecycle E2E', () => {
     },
     STEP_TIMEOUT_MS,
   );
-},
-// Jest suite-level timeout
-SUITE_TIMEOUT_MS,
-);
+});
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 

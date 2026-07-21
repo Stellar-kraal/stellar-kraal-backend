@@ -1,0 +1,9 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "../src/monitoring",
+    "outDir": "../dist/monitoring"
+  },
+  "include": ["../src/monitoring/**/*"],
+  "exclude": ["../node_modules", "../src/monitoring/**/*.test.ts"]
+}

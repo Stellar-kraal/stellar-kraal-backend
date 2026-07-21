@@ -203,6 +203,7 @@ npm run test:frontend
 | [Loan State Machine](docs/protocol/loan-state-machine.md) | All loan states, valid transitions, triggering events, and on-chain event mapping |
 | [Liquidation Mechanism](docs/protocol/liquidation.md) | Health factor formula, liquidation threshold, partial liquidation examples |
 | [Smart Contract Interface](docs/contracts/stellarkraal-interface.md) | Soroban contract public API, error codes, state changes, and CLI invocation guide |
+| [On-Chain Anomaly Detection](docs/ops/anomaly-detection.md) | Monitoring service rules, thresholds, alert dedup, and incident response playbook |
 
 ## Architecture Decision Records
 
@@ -216,6 +217,9 @@ Key design decisions are documented as ADRs in [`docs/adr/`](docs/adr/).
 | [ADR-004](docs/adr/ADR-004-nextjs-tailwind.md) | Next.js 14 + Tailwind CSS for the Frontend | Accepted |
 | [ADR-005](docs/adr/ADR-005-collateral-appraisal-model.md) | Off-chain collateral appraisal model | Accepted |
 | [ADR-006](docs/adr/ADR-006-oracle-design.md) | Multi-oracle median aggregation for price feeds | Accepted |
+| [ADR-007](docs/adr/ADR-007-oracle-aggregation-provenance.md) | Off-chain median aggregation with hash-committed provenance for the appraisal oracle | Accepted |
+| [ADR-008](docs/adr/ADR-008-event-schema-versioning.md) | Topic-based versioning for on-chain event schemas | Accepted |
+| [ADR-009](docs/adr/ADR-009-cross-contract-auth.md) | Native `require_auth` with stored role addresses for cross-contract authorization | Accepted |
 
 To add a new ADR, copy [`docs/adr/template.md`](docs/adr/template.md), increment the number, fill in all sections, and add a row to the table above.
 

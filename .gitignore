@@ -34,6 +34,6 @@ Thumbs.db
 # Coverage
 coverage/
 
-# Load test
-.env.load
-load-results/
+# Rust / Soroban contract build output (contracts/Cargo.lock IS committed)
+**/target/
+**/*.rs.bk

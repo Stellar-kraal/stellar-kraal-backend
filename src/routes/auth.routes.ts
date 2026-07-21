@@ -6,6 +6,7 @@ import { Router } from 'express';
 import {
   getChallenge,
   login,
+  logout,
   getMe,
   updateMe,
 } from '../controllers/auth.controller';
@@ -28,6 +29,13 @@ router.get('/challenge', getChallenge);
  * @body   { publicKey: string; signedTransaction: string }
  */
 router.post('/login', login);
+
+/**
+ * @route  POST /api/auth/logout
+ * @desc   Clear the HttpOnly session cookie
+ * @access Public (idempotent)
+ */
+router.post('/logout', logout);
 
 /**
  * @route  GET /api/auth/me

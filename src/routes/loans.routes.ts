@@ -10,6 +10,7 @@ import {
   requestLoan,
 } from '../controllers/loans.controller';
 import { requireAuth } from '../middleware/requireAuth';
+import { expensiveOpLimiter } from '../middleware/rateLimiter';
 
 const router = Router();
 
@@ -19,7 +20,7 @@ const router = Router();
  * @access Public
  * @query  page, limit
  */
-router.get('/', getMarketLoans);
+router.get('/', expensiveOpLimiter, getMarketLoans);
 
 /**
  * @route  GET /api/loans/my

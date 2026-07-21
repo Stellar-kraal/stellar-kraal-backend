@@ -7,9 +7,9 @@
 
 import express, { Application, Request, Response } from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import morgan from 'morgan';
-import rateLimit from 'express-rate-limit';
 
 import { env } from './config/env';
 import { logger } from './lib/logger';
@@ -17,6 +17,7 @@ import { logger } from './lib/logger';
 import authRoutes from './routes/auth.routes';
 import livestockRoutes from './routes/livestock.routes';
 import loanRoutes from './routes/loans.routes';
+import retirementRoutes from './routes/retirements.routes';
 
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 
@@ -43,22 +44,16 @@ const corsOptions: cors.CorsOptions = {
   maxAge: 86_400, // 24 h preflight cache
 };
 
-// ─── Rate Limiting ─────────────────────────────────────────────────────────────
+import { globalLimiter, authLimiter } from './middleware/rateLimiter';
 
-const globalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,  // 15 minutes
-  max: 500,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many requests. Please try again later.' },
-});
-
-const authLimiter = rateLimit({
+// Bulk retirement submits real Soroban transactions and can be batched up to
+// 100 credits per call, so it gets a much tighter limit than general traffic.
+const bulkRetirementLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 20,
+  max: 10,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: 'Too many authentication attempts. Please try again later.' },
+  message: { error: 'Too many bulk retirement requests. Please try again later.' },
 });
 
 // ─── Morgan HTTP logger stream ────────────────────────────────────────────────
@@ -79,9 +74,10 @@ export function createApp(): Application {
   app.use(cors(corsOptions));
   app.options('*', cors(corsOptions)); // preflight
 
-  // ── Body parsing ──────────────────────────────────────────────────────────
+  // ── Body & cookie parsing ─────────────────────────────────────────────────
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+  app.use(cookieParser());
 
   // ── HTTP logging ──────────────────────────────────────────────────────────
   if (env.NODE_ENV !== 'test') {
@@ -106,6 +102,7 @@ export function createApp(): Application {
   app.use('/api/auth', authLimiter, authRoutes);
   app.use('/api/livestock', livestockRoutes);
   app.use('/api/loans', loanRoutes);
+  app.use('/api/retirements', bulkRetirementLimiter, retirementRoutes);
 
   // ── 404 + Global error handler ────────────────────────────────────────────
   app.use(notFoundHandler);

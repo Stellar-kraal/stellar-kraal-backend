@@ -18,6 +18,7 @@ import { logger } from './lib/logger';
 import authRoutes from './routes/auth.routes';
 import livestockRoutes from './routes/livestock.routes';
 import loanRoutes from './routes/loans.routes';
+import retirementRoutes from './routes/retirements.routes';
 
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 
@@ -60,6 +61,16 @@ const authLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many authentication attempts. Please try again later.' },
+});
+
+// Bulk retirement submits real Soroban transactions and can be batched up to
+// 100 credits per call, so it gets a much tighter limit than general traffic.
+const bulkRetirementLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many bulk retirement requests. Please try again later.' },
 });
 
 // ─── Morgan HTTP logger stream ────────────────────────────────────────────────
@@ -108,6 +119,7 @@ export function createApp(): Application {
   app.use('/api/auth', authLimiter, authRoutes);
   app.use('/api/livestock', livestockRoutes);
   app.use('/api/loans', loanRoutes);
+  app.use('/api/retirements', bulkRetirementLimiter, retirementRoutes);
 
   // ── 404 + Global error handler ────────────────────────────────────────────
   app.use(notFoundHandler);

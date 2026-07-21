@@ -22,6 +22,7 @@ import {
   BASE_FEE,
   xdr,
   StrKey,
+  Memo,
 } from '@stellar/stellar-sdk';
 import jwt, { SignOptions, JwtPayload } from 'jsonwebtoken';
 import { createLogger } from '../lib/logger';
@@ -88,7 +89,7 @@ export async function buildChallenge(clientPublicKey: string): Promise<string> {
     throw new Error('Invalid Stellar public key');
   }
 
-  const serverKeypair = Keypair.fromSecret(env.SERVER_SECRET_KEY);
+  const serverKeypair = Keypair.fromSecret(env.AUTH_SERVER_SECRET_KEY);
 
   // Use sequence 0 — challenge transactions are never submitted
   const serverAccount = new Account(serverKeypair.publicKey(), '0');
@@ -98,9 +99,8 @@ export async function buildChallenge(clientPublicKey: string): Promise<string> {
   const maxTime = minTime + CHALLENGE_TTL_SECONDS;
 
   // manageData value is limited to 64 bytes.
-  // Store a truncated nonce (32 chars) as the value so the client can verify
-  // they are signing the correct challenge. Full nonce verified server-side.
-  const valueBytes = Buffer.from(nonce.slice(0, 32));
+  // Format: "${clientPublicKey}:${nonce.slice(0, 7)}" (56 + 1 + 7 = 64 bytes)
+  const valueBytes = Buffer.from(`${clientPublicKey}:${nonce.slice(0, 7)}`);
 
   const tx = new TransactionBuilder(serverAccount, {
     fee: BASE_FEE,
@@ -113,7 +113,7 @@ export async function buildChallenge(clientPublicKey: string): Promise<string> {
         source: clientPublicKey,
       }),
     )
-    .addMemo({ type: 'none', value: '' } as never)
+    .addMemo(Memo.none())
     .setTimebounds(minTime, maxTime)
     .build();
 
@@ -194,7 +194,7 @@ export async function verifyChallenge(
   if (embeddedPublicKey !== clientPublicKey) {
     throw new Error('Public key mismatch in challenge payload');
   }
-  if (embeddedNonce !== pending.nonce) {
+  if (embeddedNonce !== pending.nonce.slice(0, 7)) {
     throw new Error('Nonce mismatch');
   }
 

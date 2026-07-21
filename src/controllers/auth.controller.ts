@@ -14,6 +14,7 @@ import {
   authenticateUser,
 } from '../services/auth.service';
 import prisma from '../lib/prisma';
+import { setSessionCookie, clearSessionCookie } from '../lib/authCookie';
 import { createLogger } from '../lib/logger';
 
 const log = createLogger('auth-controller');
@@ -54,8 +55,12 @@ export async function getChallenge(
  *
  * Body: { publicKey: string; signedTransaction: string }
  *
- * Verifies the client's signature on the challenge transaction and
- * issues a JWT on success.
+ * Verifies the client's signature on the challenge transaction and issues a
+ * JWT on success. The JWT is set as an `HttpOnly`, `Secure`, `SameSite` cookie
+ * so browsers never expose it to JavaScript (mitigates XSS session theft,
+ * threat FE-02). The token is also returned in the body for non-browser API
+ * clients — browser clients should rely on the cookie and must not persist the
+ * body token in localStorage.
  */
 export async function login(
   req: Request,
@@ -83,6 +88,9 @@ export async function login(
     // Find or create the user and issue JWT
     const { token, user } = await authenticateUser(verifiedKey);
 
+    // Issue the JWT as an HttpOnly session cookie (primary browser session).
+    setSessionCookie(res, token);
+
     log.info('User authenticated', { userId: user.id, publicKey: user.publicKey });
 
     res.json({
@@ -101,6 +109,18 @@ export async function login(
     }
     next(err);
   }
+}
+
+/**
+ * POST /api/auth/logout
+ *
+ * Clears the HttpOnly session cookie. Since JWTs are stateless there is no
+ * server-side session to destroy — removing the cookie ends the browser
+ * session. Idempotent: safe to call whether or not a session exists.
+ */
+export function logout(_req: Request, res: Response): void {
+  clearSessionCookie(res);
+  res.json({ message: 'Logged out' });
 }
 
 /**

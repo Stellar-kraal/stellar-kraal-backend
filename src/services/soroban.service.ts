@@ -80,13 +80,34 @@ export async function invokeContract(
 
   const contract = new Contract(env.CONTRACT_ID);
 
+  // Fetch current ledger for ledger-bound enforcement (Surface 4 replay mitigation)
+  // Transactions are only valid within a ~100-ledger window (~8 minutes at 5 s/ledger).
+  // This prevents delayed or replayed transaction submission.
+  const LEDGER_BOUND_WINDOW = 100;
+  let minLedger: number | undefined;
+  let maxLedger: number | undefined;
+  try {
+    const latestLedger = await rpc.getLatestLedger();
+    minLedger = latestLedger.sequence;
+    maxLedger = latestLedger.sequence + LEDGER_BOUND_WINDOW;
+    log.debug('Applying ledger bounds', { minLedger, maxLedger, functionName });
+  } catch (err) {
+    log.warn('Could not fetch latest ledger for bounds; proceeding without ledger bounds', { err });
+  }
+
   // Build the transaction
-  let txBuilder = new TransactionBuilder(account, {
+  const txBuilder = new TransactionBuilder(account, {
     fee: BASE_FEE,
     networkPassphrase: getNetworkPassphrase(),
   })
     .addOperation(contract.call(functionName, ...args))
     .setTimeout(30);
+
+  // Apply ledger bounds when available (high-value replay mitigation).
+  // Prevents delayed or replayed transaction submission outside the valid window.
+  if (minLedger !== undefined && maxLedger !== undefined) {
+    txBuilder.setLedgerbounds(minLedger, maxLedger);
+  }
 
   const builtTx = txBuilder.build();
 
@@ -177,6 +198,121 @@ export async function mintCollateral(
   ];
 
   return invokeContract('mint_collateral', args);
+}
+
+// ─── Bulk Retirement Batching ─────────────────────────────────────────────────
+
+export type RetirementChunkStatus = 'SUCCESS' | 'FAILED' | 'SKIPPED';
+
+export interface RetirementTarget {
+  id: string;
+  contractLoanId: string;
+}
+
+export interface RetirementChunkResult {
+  loanIds: string[];
+  contractLoanIds: string[];
+  status: RetirementChunkStatus;
+  txHash?: string;
+  error?: string;
+}
+
+/**
+ * Retire (repay/close) a batch of loans on-chain.
+ *
+ * Splits the batch into sequential sub-transactions of at most
+ * `env.SOROBAN_MAX_OPS_PER_TX` `retire_loan` operations each, to respect
+ * Soroban transaction size limits. Chunks are submitted in order; if a
+ * chunk fails on-chain, remaining chunks are not submitted and are
+ * reported as SKIPPED — this keeps a single failure from cascading into
+ * a pile of doomed transactions while still surfacing a per-credit result
+ * for every loan in the original request.
+ */
+export async function retireLoansOnChain(
+  loans: RetirementTarget[],
+  maxOpsPerChunk: number = env.SOROBAN_MAX_OPS_PER_TX,
+): Promise<RetirementChunkResult[]> {
+  const chunks = chunkArray(loans, maxOpsPerChunk);
+  const results: RetirementChunkResult[] = [];
+  let aborted = false;
+
+  for (const chunk of chunks) {
+    const loanIds = chunk.map((l) => l.id);
+    const contractLoanIds = chunk.map((l) => l.contractLoanId);
+
+    if (aborted) {
+      results.push({
+        loanIds,
+        contractLoanIds,
+        status: 'SKIPPED',
+        error: 'Skipped: an earlier batch in this request failed on-chain',
+      });
+      continue;
+    }
+
+    try {
+      const txHash = await submitRetirementChunk(contractLoanIds);
+      results.push({ loanIds, contractLoanIds, status: 'SUCCESS', txHash });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      log.error('Retirement batch failed on-chain', { contractLoanIds, error: message });
+      results.push({ loanIds, contractLoanIds, status: 'FAILED', error: message });
+      aborted = true;
+    }
+  }
+
+  return results;
+}
+
+/** Build, simulate, sign and submit a single transaction batching multiple `retire_loan` calls. */
+async function submitRetirementChunk(contractLoanIds: string[]): Promise<string> {
+  const serverKeypair = Keypair.fromSecret(env.SERVER_SECRET_KEY);
+  const rpc = getRpc();
+
+  const account = await rpc.getAccount(serverKeypair.publicKey());
+  const contract = new Contract(env.CONTRACT_ID);
+
+  let txBuilder = new TransactionBuilder(account, {
+    // Classic fee scales per operation packed into the transaction.
+    fee: (Number(BASE_FEE) * contractLoanIds.length).toString(),
+    networkPassphrase: getNetworkPassphrase(),
+  });
+
+  for (const contractLoanId of contractLoanIds) {
+    txBuilder = txBuilder.addOperation(
+      contract.call('retire_loan', nativeToScVal(contractLoanId, { type: 'string' })),
+    );
+  }
+
+  const builtTx = txBuilder.setTimeout(30).build();
+
+  const simResult = await rpc.simulateTransaction(builtTx);
+  if (SorobanRpc.Api.isSimulationError(simResult)) {
+    throw new Error(`Simulation failed: ${simResult.error}`);
+  }
+
+  const preparedTx = SorobanRpc.assembleTransaction(builtTx, simResult).build();
+  preparedTx.sign(serverKeypair);
+
+  const sendResult = await rpc.sendTransaction(preparedTx);
+  if (sendResult.status === 'ERROR') {
+    throw new Error(`Transaction submission failed: ${JSON.stringify(sendResult.errorResult)}`);
+  }
+
+  const txHash = sendResult.hash;
+  log.info('Retirement batch transaction submitted', { txHash, count: contractLoanIds.length });
+
+  await waitForTransaction(txHash);
+
+  return txHash;
+}
+
+function chunkArray<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
 }
 
 // ─── Read-only Simulations ────────────────────────────────────────────────────
@@ -345,6 +481,29 @@ async function handleLoanCreated(event: SorobanEvent): Promise<void> {
     const durationDays = Number(data['duration_days']);
     const livestockId = String(data['collateral_id']);
 
+    // Surface 5 replay mitigation: skip events that are not newer than the last
+    // processed event ledger for this loan. Prevents replayed events from
+    // rolling back terminal states (e.g. LIQUIDATED → ACTIVE).
+    const existingLoan = await prisma.loan.findUnique({ where: { contractLoanId } });
+    if (existingLoan && existingLoan.lastEventLedger !== null &&
+        event.ledger <= existingLoan.lastEventLedger) {
+      log.debug('Skipping replayed LoanCreated event (ledger not newer)', {
+        contractLoanId,
+        eventLedger: event.ledger,
+        lastEventLedger: existingLoan.lastEventLedger,
+      });
+      return;
+    }
+
+    // Do not allow LoanCreated to override a terminal status
+    if (existingLoan && ['REPAID', 'LIQUIDATED', 'DEFAULTED'].includes(existingLoan.status)) {
+      log.debug('Skipping LoanCreated: loan already in terminal state', {
+        contractLoanId,
+        status: existingLoan.status,
+      });
+      return;
+    }
+
     // Find the borrower user (they must already be registered)
     const borrower = await prisma.user.findUnique({
       where: { publicKey: borrowerKey },
@@ -397,6 +556,19 @@ async function handleLoanStatusChange(
   try {
     const data = scValToNative(event.value) as Record<string, unknown>;
     const contractLoanId = String(data['loan_id']);
+
+    // Surface 5 replay mitigation: discard events with ledger ≤ lastEventLedger
+    const existingLoan = await prisma.loan.findUnique({ where: { contractLoanId } });
+    if (existingLoan && existingLoan.lastEventLedger !== null &&
+        event.ledger <= existingLoan.lastEventLedger) {
+      log.debug('Skipping replayed status-change event (ledger not newer)', {
+        contractLoanId,
+        eventLedger: event.ledger,
+        lastEventLedger: existingLoan.lastEventLedger,
+        status,
+      });
+      return;
+    }
 
     const updateData: Record<string, unknown> = {
       status: status === 'REPAID' ? LoanStatus.REPAID : LoanStatus.LIQUIDATED,

@@ -10,6 +10,7 @@ import {
   updateLivestock,
 } from '../controllers/livestock.controller';
 import { requireAuth, requireRole } from '../middleware/requireAuth';
+import { expensiveOpLimiter } from '../middleware/rateLimiter';
 
 const router = Router();
 
@@ -22,7 +23,7 @@ router.use(requireAuth);
  * @access Private (FARMER | ADMIN)
  * @body   { animalId, type, breed, weightKg, ageMonths, healthStatus, imageUrl?, location? }
  */
-router.post('/register', requireRole('FARMER', 'ADMIN'), registerLivestock);
+router.post('/register', requireRole('FARMER', 'ADMIN'), expensiveOpLimiter, registerLivestock);
 
 /**
  * @route  GET /api/livestock/my-kraal

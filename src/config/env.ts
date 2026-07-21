@@ -113,6 +113,15 @@ export const env = {
   /** Start ledger for event polling (0 = latest) */
   START_LEDGER: requirePositiveInt('START_LEDGER', 0),
 
+  // ── Rate Limiting ─────────────────────────────────────────────────────────
+  REDIS_URL: optionalEnv('REDIS_URL', ''),
+  RATE_LIMIT_GLOBAL_MAX: requirePositiveInt('RATE_LIMIT_GLOBAL_MAX', 100),
+  RATE_LIMIT_USER_MAX: requirePositiveInt('RATE_LIMIT_USER_MAX', 500),
+  RATE_LIMIT_ORACLE_MAX: requirePositiveInt('RATE_LIMIT_ORACLE_MAX', 10),
+  RATE_LIMIT_WINDOW_MS: requirePositiveInt('RATE_LIMIT_WINDOW_MS', 15 * 60 * 1000), // 15 mins
+  RATE_LIMIT_AUTH_MAX_FAILED_ATTEMPTS: requirePositiveInt('RATE_LIMIT_AUTH_MAX_FAILED_ATTEMPTS', 5),
+  RATE_LIMIT_AUTH_BLOCK_DURATION_MS: requirePositiveInt('RATE_LIMIT_AUTH_BLOCK_DURATION_MS', 10 * 60 * 1000), // 10 mins
+
   // ── Logging ──────────────────────────────────────────────────────────────
   LOG_LEVEL: optionalEnv('LOG_LEVEL', 'info'),
 

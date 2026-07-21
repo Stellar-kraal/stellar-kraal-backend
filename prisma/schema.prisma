@@ -104,3 +104,11 @@ model IdempotencyKey {
   @@index([key])
   @@index([expiresAt])
 }
+
+// ─── Rate Limit (SQLite fallback) ────────────────────────────────────────────
+
+model RateLimit {
+  key        String   @id
+  hits       Int
+  resetTime  DateTime
+}

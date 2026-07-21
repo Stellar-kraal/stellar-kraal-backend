@@ -10,7 +10,6 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import morgan from 'morgan';
-import rateLimit from 'express-rate-limit';
 
 import { env } from './config/env';
 import { logger } from './lib/logger';
@@ -45,23 +44,7 @@ const corsOptions: cors.CorsOptions = {
   maxAge: 86_400, // 24 h preflight cache
 };
 
-// ─── Rate Limiting ─────────────────────────────────────────────────────────────
-
-const globalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,  // 15 minutes
-  max: 500,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many requests. Please try again later.' },
-});
-
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many authentication attempts. Please try again later.' },
-});
+import { globalLimiter, authLimiter } from './middleware/rateLimiter';
 
 // Bulk retirement submits real Soroban transactions and can be batched up to
 // 100 credits per call, so it gets a much tighter limit than general traffic.

@@ -20,6 +20,7 @@ import {
   verifyChallenge,
   TokenPayload,
 } from '../../src/services/auth.service';
+import { env } from '../../src/config/env';
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -186,5 +187,46 @@ describe('verifyChallenge', () => {
     await expect(
       verifyChallenge(CLIENT_PUBLIC_KEY, signedXdr),
     ).rejects.toThrow('No pending challenge');
+  });
+});
+
+// ─── Key Separation (BE-01) ───────────────────────────────────────────────────
+
+describe('Key Separation (BE-01)', () => {
+  it('uses distinct keypairs for AUTH_SERVER_SECRET_KEY and ORACLE_SERVER_SECRET_KEY', () => {
+    const authKeypair = Keypair.fromSecret(env.AUTH_SERVER_SECRET_KEY);
+    const oracleKeypair = Keypair.fromSecret(env.ORACLE_SERVER_SECRET_KEY);
+
+    expect(authKeypair.publicKey()).not.toBe(oracleKeypair.publicKey());
+    expect(env.AUTH_SERVER_SECRET_KEY).not.toBe(env.ORACLE_SERVER_SECRET_KEY);
+  });
+
+  it('pre-signs SEP-10 auth challenge using AUTH_SERVER_SECRET_KEY', async () => {
+    const xdrStr = await buildChallenge(CLIENT_PUBLIC_KEY);
+    const envelope = xdr.TransactionEnvelope.fromXDR(xdrStr, 'base64');
+    const tx = new Transaction(envelope, 'Test SDF Network ; September 2015');
+
+    const authKeypair = Keypair.fromSecret(env.AUTH_SERVER_SECRET_KEY);
+    const oracleKeypair = Keypair.fromSecret(env.ORACLE_SERVER_SECRET_KEY);
+    const txHash = tx.hash();
+
+    const isSignedByAuthKey = tx.signatures.some((sig) => {
+      try {
+        return authKeypair.verify(txHash, sig.signature());
+      } catch {
+        return false;
+      }
+    });
+
+    const isSignedByOracleKey = tx.signatures.some((sig) => {
+      try {
+        return oracleKeypair.verify(txHash, sig.signature());
+      } catch {
+        return false;
+      }
+    });
+
+    expect(isSignedByAuthKey).toBe(true);
+    expect(isSignedByOracleKey).toBe(false);
   });
 });

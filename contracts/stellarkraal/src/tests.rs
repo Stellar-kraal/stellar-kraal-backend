@@ -1851,3 +1851,72 @@ proptest! {
         assert_eq!(loan.outstanding, loan.principal);
     }
 }
+
+    #[test]
+    fn test_submit_oracle_prices_updates_twap_and_last_price() {
+        let (env, cid, admin, oracle, token, treasury) = setup();
+        init(&env, &cid, &admin, &oracle, &token, &treasury);
+        let client = StellarKraalClient::new(&env, &cid);
+
+        client.submit_oracle_prices(&oracle, &vec![&env, 500_000i128]);
+
+        let twap_data = client.get_twap_data();
+        assert_eq!(twap_data.current_price, 500_000i128);
+        assert_eq!(twap_data.twap_price, 500_000i128);
+    }
+
+    #[test]
+    #[should_panic(expected = "#18")]
+    fn test_register_livestock_exceeds_oracle_price_fails() {
+        let (env, cid, admin, oracle, token, treasury) = setup();
+        init(&env, &cid, &admin, &oracle, &token, &treasury);
+        let client = StellarKraalClient::new(&env, &cid);
+
+        client.submit_oracle_prices(&oracle, &vec![&env, 1_000_000i128]);
+
+        let farmer = Address::generate(&env);
+        client.register_livestock(&farmer, &symbol_short!("cattle"), &1, &2_000_000i128);
+    }
+
+    #[test]
+    #[should_panic(expected = "#18")]
+    fn test_update_appraisal_exceeds_oracle_price_fails() {
+        let (env, cid, admin, oracle, token, treasury) = setup();
+        init(&env, &cid, &admin, &oracle, &token, &treasury);
+        let client = StellarKraalClient::new(&env, &cid);
+
+        let farmer = Address::generate(&env);
+        let col_id = client.register_livestock(&farmer, &symbol_short!("cattle"), &1, &1_000_000i128);
+
+        client.submit_oracle_prices(&oracle, &vec![&env, 1_000_000i128]);
+
+        client.update_appraisal(&farmer, &col_id, &2_000_000i128);
+    }
+
+    #[test]
+    fn test_oracle_price_drop_updates_health_factor_and_enables_liquidation() {
+        let (env, cid, admin, oracle, token, treasury) = setup();
+        init(&env, &cid, &admin, &oracle, &token, &treasury);
+        let client = StellarKraalClient::new(&env, &cid);
+
+        client.submit_oracle_prices(&oracle, &vec![&env, 1_000_000i128]);
+
+        let borrower = Address::generate(&env);
+        let col_id = client.register_livestock(&borrower, &symbol_short!("cattle"), &1, &1_000_000i128);
+
+        let loan_id = client.request_loan(&borrower, &vec![&env, col_id], &600_000i128);
+
+        let hf1 = client.health_factor(&loan_id);
+        assert!(hf1 >= 10_000);
+
+        client.submit_price(&oracle, &500_000i128);
+
+        let hf2 = client.health_factor(&loan_id);
+        assert!(hf2 < 10_000);
+
+        let liquidator = Address::generate(&env);
+        client.liquidate(&liquidator, &loan_id, &300_000i128);
+
+        let loan = client.get_loan(&loan_id);
+        assert_eq!(loan.outstanding, 300_000i128);
+    }

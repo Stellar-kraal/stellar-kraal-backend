@@ -511,6 +511,19 @@ impl StellarKraal {
                 return Err(Error::InvalidAmount);
             }
         }
+        if let Some(oracle_price) = Self::get_effective_oracle_price(&env) {
+            let dev_bps: u32 = env.storage().instance().get(&DEV_BPS).unwrap_or(2000);
+            let oracle_max_unit = oracle_price
+                .checked_mul((10_000 + dev_bps) as i128)
+                .unwrap_or(i128::MAX)
+                / 10_000;
+            let oracle_max_total = (count as i128)
+                .checked_mul(oracle_max_unit)
+                .unwrap_or(i128::MAX);
+            if appraised_value > oracle_max_total {
+                return Err(Error::InvalidPrice);
+            }
+        }
         owner.require_auth();
 
         let id = Self::next_id(&env, DataKey::CollateralCounter)?;
@@ -564,8 +577,9 @@ impl StellarKraal {
             if collateral.owner != borrower {
                 return Err(Error::Unauthorized);
             }
+            let eff_val = Self::get_collateral_effective_value(&env, &collateral);
             total_collateral_value = total_collateral_value
-                .checked_add(collateral.appraised_value)
+                .checked_add(eff_val)
                 .ok_or(Error::InvalidAmount)?;
         }
 
@@ -743,7 +757,7 @@ impl StellarKraal {
         let liq_thr: u32 = env.storage().instance().get(&LIQ_THR).unwrap();
         let close_factor: u32 = env.storage().instance().get(&CLOSE_FACTOR).unwrap();
 
-        let hf = Self::compute_health_factor_with_thr(&loan, liq_thr)?;
+        let hf = Self::compute_health_factor_with_thr(&env, &loan, liq_thr)?;
         if hf >= 10_000 {
             return Err(Error::HealthFactorSafe);
         }
@@ -775,7 +789,6 @@ impl StellarKraal {
             0
         };
 
-        let borrower = loan.borrower.clone();
         env.storage().persistent().set(&DataKey::Loan(loan_id), &loan);
         env.storage().persistent().extend_ttl(&DataKey::Loan(loan_id), PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_LEDGERS);
 
@@ -876,7 +889,7 @@ impl StellarKraal {
             .get(&DataKey::Loan(loan_id))
             .ok_or(Error::LoanNotFound)?;
         let liq_thr: u32 = env.storage().instance().get(&LIQ_THR).unwrap();
-        Self::compute_health_factor_with_thr(&loan, liq_thr)
+        Self::compute_health_factor_with_thr(&env, &loan, liq_thr)
     }
 
     // ── update_appraisal ──────────────────────────────────────────────────
@@ -902,6 +915,20 @@ impl StellarKraal {
 
         if record.owner != owner {
             return Err(Error::Unauthorized);
+        }
+
+        if let Some(oracle_price) = Self::get_effective_oracle_price(&env) {
+            let dev_bps: u32 = env.storage().instance().get(&DEV_BPS).unwrap_or(2000);
+            let oracle_max_unit = oracle_price
+                .checked_mul((10_000 + dev_bps) as i128)
+                .unwrap_or(i128::MAX)
+                / 10_000;
+            let oracle_max_total = (record.count as i128)
+                .checked_mul(oracle_max_unit)
+                .unwrap_or(i128::MAX);
+            if new_value > oracle_max_total {
+                return Err(Error::InvalidPrice);
+            }
         }
 
         if record.appraisal_history.len() >= 3 {
@@ -1246,6 +1273,26 @@ impl StellarKraal {
             (arr[mid - 1] + arr[mid]) / 2
         };
 
+        let now = env.ledger().timestamp();
+        let window: u64 = env.storage().instance().get(&TWAP_WINDOW).unwrap_or(3600);
+        let last_time: u64 = env.storage().instance().get(&LAST_PRICE_TIME).unwrap_or(0);
+
+        let (new_sum, new_count) = if last_time == 0 || now.saturating_sub(last_time) > window {
+            (median, 1u32)
+        } else {
+            let sum: i128 = env.storage().instance().get(&TWAP_SUM).unwrap_or(0);
+            let count: u32 = env.storage().instance().get(&TWAP_COUNT).unwrap_or(0);
+            let new_count = count.saturating_add(1);
+            (sum.checked_add(median).unwrap_or(i128::MAX), new_count)
+        };
+
+        let twap = new_sum / new_count as i128;
+        env.storage().instance().set(&LAST_PRICE, &median);
+        env.storage().instance().set(&LAST_PRICE_TIME, &now);
+        env.storage().instance().set(&TWAP_SUM, &new_sum);
+        env.storage().instance().set(&TWAP_COUNT, &new_count);
+        env.storage().instance().set(&TWAP_PRICE, &twap);
+
         let mut flagged_count = 0;
         for price in prices.iter() {
             let diff = if price > median { price - median } else { median - price };
@@ -1428,18 +1475,77 @@ impl StellarKraal {
         Ok(next)
     }
 
-    /// Pure arithmetic health-factor computation (zero storage access).
+    /// Active oracle price / TWAP helper.
+    fn get_effective_oracle_price(env: &Env) -> Option<i128> {
+        let twap: i128 = env.storage().instance().get(&TWAP_PRICE).unwrap_or(0);
+        let last: i128 = env.storage().instance().get(&LAST_PRICE).unwrap_or(0);
+        let price = if twap > 0 { twap } else { last };
+        if price <= 0 {
+            return None;
+        }
+
+        let price_max: i128 = env.storage().instance().get(&PRICE_MAX).unwrap_or(0);
+        let price_min: i128 = env.storage().instance().get(&PRICE_MIN).unwrap_or(0);
+
+        let mut capped = price;
+        if price_max > 0 && capped > price_max {
+            capped = price_max;
+        }
+        if price_min > 0 && capped < price_min {
+            capped = price_min;
+        }
+
+        Some(capped)
+    }
+
+    /// Calculate effective value of a collateral record cross-checked against oracle price/TWAP.
+    fn get_collateral_effective_value(env: &Env, collateral: &CollateralRecord) -> i128 {
+        let val = collateral.appraised_value;
+        if let Some(oracle_price) = Self::get_effective_oracle_price(env) {
+            let dev_bps: u32 = env.storage().instance().get(&DEV_BPS).unwrap_or(2000);
+            let oracle_max_unit = oracle_price
+                .checked_mul((10_000 + dev_bps) as i128)
+                .unwrap_or(i128::MAX)
+                / 10_000;
+            let oracle_max_total = (collateral.count as i128)
+                .checked_mul(oracle_max_unit)
+                .unwrap_or(i128::MAX);
+            if val > oracle_max_total {
+                return oracle_max_total;
+            }
+        }
+        val
+    }
+
+    /// Health-factor computation factoring in current oracle price validation.
     ///
     /// Formula: `(collateral_value × liq_thr_bps) / outstanding`
-    fn compute_health_factor_with_thr(loan: &LoanRecord, liq_thr: u32) -> Result<i128, Error> {
+    fn compute_health_factor_with_thr(env: &Env, loan: &LoanRecord, liq_thr: u32) -> Result<i128, Error> {
         let total_debt = loan.outstanding
             .checked_add(loan.interest_accrued)
             .ok_or(Error::InvalidAmount)?;
         if total_debt == 0 {
             return Ok(i128::MAX);
         }
-        let numerator = loan
-            .total_collateral_value
+
+        let mut current_collateral_value: i128 = 0;
+        for col_id in loan.collateral_ids.iter() {
+            if let Some(collateral) = env
+                .storage()
+                .persistent()
+                .get::<_, CollateralRecord>(&DataKey::Collateral(col_id))
+            {
+                let eff_val = Self::get_collateral_effective_value(env, &collateral);
+                current_collateral_value = current_collateral_value
+                    .checked_add(eff_val)
+                    .ok_or(Error::InvalidAmount)?;
+            }
+        }
+        if current_collateral_value == 0 && loan.total_collateral_value > 0 {
+            current_collateral_value = loan.total_collateral_value;
+        }
+
+        let numerator = current_collateral_value
             .checked_mul(liq_thr as i128)
             .ok_or(Error::InvalidAmount)?;
         let denominator = loan.outstanding.checked_mul(10_000).ok_or(Error::InvalidAmount)?;

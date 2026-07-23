@@ -94,6 +94,54 @@ describe('issueJwt / verifyJwt', () => {
     const decoded = verifyJwt(adminToken);
     expect(decoded.role).toBe('ADMIN');
   });
+
+  describe('JWT rotation (dual-key overlap window)', () => {
+    // Mutable at runtime despite `as const` typing (that's type-level only).
+    const mutableEnv = env as unknown as Record<string, string | number>;
+    const originalPrevious = env.JWT_SECRET_PREVIOUS;
+    const originalRotatedAt = env.JWT_SECRET_ROTATED_AT;
+    const originalOverlapMs = env.JWT_ROTATION_OVERLAP_MS;
+
+    afterEach(() => {
+      mutableEnv.JWT_SECRET_PREVIOUS = originalPrevious;
+      mutableEnv.JWT_SECRET_ROTATED_AT = originalRotatedAt;
+      mutableEnv.JWT_ROTATION_OVERLAP_MS = originalOverlapMs;
+    });
+
+    it('accepts a token signed with the previous secret while inside the overlap window', () => {
+      const jwtLib = require('jsonwebtoken') as typeof import('jsonwebtoken');
+      const oldSecret = 'previous-jwt-secret-for-rotation-test';
+      const tokenFromOldSecret = jwtLib.sign(payload, oldSecret, { algorithm: 'HS256', expiresIn: '1h' });
+
+      mutableEnv.JWT_SECRET_PREVIOUS = oldSecret;
+      mutableEnv.JWT_SECRET_ROTATED_AT = new Date().toISOString();
+      mutableEnv.JWT_ROTATION_OVERLAP_MS = 60 * 60 * 1000;
+
+      const decoded = verifyJwt(tokenFromOldSecret);
+      expect(decoded.sub).toBe(payload.sub);
+    });
+
+    it('rejects a token signed with the previous secret once the overlap window has elapsed', () => {
+      const jwtLib = require('jsonwebtoken') as typeof import('jsonwebtoken');
+      const oldSecret = 'previous-jwt-secret-for-rotation-test';
+      const tokenFromOldSecret = jwtLib.sign(payload, oldSecret, { algorithm: 'HS256', expiresIn: '1h' });
+
+      mutableEnv.JWT_SECRET_PREVIOUS = oldSecret;
+      mutableEnv.JWT_SECRET_ROTATED_AT = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(); // 2h ago
+      mutableEnv.JWT_ROTATION_OVERLAP_MS = 60 * 60 * 1000; // 1h window, already elapsed
+
+      expect(() => verifyJwt(tokenFromOldSecret)).toThrow();
+    });
+
+    it('still verifies current-secret tokens normally when no rotation is in progress', () => {
+      mutableEnv.JWT_SECRET_PREVIOUS = '';
+      mutableEnv.JWT_SECRET_ROTATED_AT = '';
+
+      const token = issueJwt(payload);
+      const decoded = verifyJwt(token);
+      expect(decoded.sub).toBe(payload.sub);
+    });
+  });
 });
 
 // ─── SEP-10 Challenge ─────────────────────────────────────────────────────────

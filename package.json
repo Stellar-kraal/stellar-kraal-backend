@@ -23,7 +23,8 @@
     "db:reset": "prisma migrate reset --force",
     "monitor": "ts-node-dev --respawn --transpile-only --exit-child src/monitoring/index.ts",
     "monitor:build": "tsc --project monitoring/tsconfig.json",
-    "monitor:start": "node dist/monitoring/index.js"
+    "monitor:start": "node dist/monitoring/index.js",
+    "rotate:jwt-secret": "ts-node scripts/rotate-jwt-secret.ts"
   },
   "dependencies": {
     "@prisma/client": "5.22.0",

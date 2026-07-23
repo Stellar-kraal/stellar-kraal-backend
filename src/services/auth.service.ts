@@ -49,11 +49,34 @@ export function issueJwt(payload: Omit<TokenPayload, 'iat' | 'exp'>): string {
   return jwt.sign(payload, env.JWT_SECRET, options);
 }
 
-/** Verify a JWT and return its decoded payload. Throws on invalid/expired token. */
+/**
+ * True while a rotated-out JWT secret should still be accepted, i.e. within
+ * JWT_ROTATION_OVERLAP_MS of JWT_SECRET_ROTATED_AT. See
+ * docs/ops/secrets-rotation.md for the rotation procedure this supports.
+ */
+function withinRotationOverlap(): boolean {
+  if (!env.JWT_SECRET_PREVIOUS || !env.JWT_SECRET_ROTATED_AT) return false;
+  const rotatedAtMs = Date.parse(env.JWT_SECRET_ROTATED_AT);
+  return Date.now() - rotatedAtMs < env.JWT_ROTATION_OVERLAP_MS;
+}
+
+/**
+ * Verify a JWT and return its decoded payload. Throws on invalid/expired token.
+ *
+ * Tries the current JWT_SECRET first. If that fails and a rotation is in
+ * progress (JWT_SECRET_PREVIOUS set and still within its overlap window),
+ * falls back to the previous secret so tokens issued before a rotation
+ * remain valid until they naturally expire or the overlap window closes.
+ */
 export function verifyJwt(token: string): TokenPayload {
-  return jwt.verify(token, env.JWT_SECRET, {
-    algorithms: ['HS256'],
-  }) as TokenPayload;
+  try {
+    return jwt.verify(token, env.JWT_SECRET, { algorithms: ['HS256'] }) as TokenPayload;
+  } catch (err) {
+    if (withinRotationOverlap()) {
+      return jwt.verify(token, env.JWT_SECRET_PREVIOUS, { algorithms: ['HS256'] }) as TokenPayload;
+    }
+    throw err;
+  }
 }
 
 // ─── SEP-10 Challenge ─────────────────────────────────────────────────────────

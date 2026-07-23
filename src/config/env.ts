@@ -51,6 +51,17 @@ function requirePositiveInt(key: string, defaultValue: number): number {
   return parsed;
 }
 
+/** Reads `key`, falling back to `fallbackKey` if `key` is unset. Throws if neither is set. */
+function requireEnvWithFallback(key: string, fallbackKey: string): string {
+  const value = process.env[key];
+  if (value && value.trim() !== '') return value.trim();
+
+  const fallback = process.env[fallbackKey];
+  if (fallback && fallback.trim() !== '') return fallback.trim();
+
+  throw new Error(`Missing required environment variable: ${key} (or fallback ${fallbackKey})`);
+}
+
 // ─── Validated Configuration ─────────────────────────────────────────────────
 
 export const env = {
@@ -68,6 +79,21 @@ export const env = {
   // ── JWT ──────────────────────────────────────────────────────────────────
   JWT_SECRET: requireEnv('JWT_SECRET'),
   JWT_EXPIRES_IN: optionalEnv('JWT_EXPIRES_IN', '24h'),
+  /**
+   * Retired JWT signing secret, kept readable for a limited overlap window
+   * so tokens issued before a rotation don't get invalidated instantly.
+   * Set together with JWT_SECRET_ROTATED_AT when rotating. See
+   * docs/ops/secrets-rotation.md.
+   */
+  JWT_SECRET_PREVIOUS: optionalEnv('JWT_SECRET_PREVIOUS', ''),
+  /** ISO-8601 timestamp of the most recent JWT_SECRET rotation. Required for JWT_SECRET_PREVIOUS to take effect. */
+  JWT_SECRET_ROTATED_AT: optionalEnv('JWT_SECRET_ROTATED_AT', ''),
+  /** How long (ms) JWT_SECRET_PREVIOUS is still accepted after JWT_SECRET_ROTATED_AT. Default 1 hour. */
+  JWT_ROTATION_OVERLAP_MS: requirePositiveInt('JWT_ROTATION_OVERLAP_MS', 60 * 60 * 1000),
+
+  // ── Secrets management ───────────────────────────────────────────────────
+  /** Which SecretsProvider resolves `mock://...` / real secret references. See src/lib/secretsProvider.ts. */
+  SECRETS_PROVIDER: optionalEnv('SECRETS_PROVIDER', 'mock') as 'mock' | 'aws',
 
   // ── Session cookie ────────────────────────────────────────────────────────
   /**
@@ -132,6 +158,20 @@ export const env = {
   /** Maximum number of retire_loan operations packed into a single Soroban transaction */
   SOROBAN_MAX_OPS_PER_TX: requirePositiveInt('SOROBAN_MAX_OPS_PER_TX', 20),
 } as const;
+
+// Validate SECRETS_PROVIDER is a known provider name
+if (env.SECRETS_PROVIDER !== 'mock' && env.SECRETS_PROVIDER !== 'aws') {
+  throw new Error(`SECRETS_PROVIDER must be "mock" or "aws", got: "${env.SECRETS_PROVIDER}"`);
+}
+
+// A previous JWT secret without a rotation timestamp (or vice versa) is a
+// misconfiguration — the overlap window can't be computed from just one of them.
+if (Boolean(env.JWT_SECRET_PREVIOUS) !== Boolean(env.JWT_SECRET_ROTATED_AT)) {
+  throw new Error('JWT_SECRET_PREVIOUS and JWT_SECRET_ROTATED_AT must be set together (or not at all)');
+}
+if (env.JWT_SECRET_ROTATED_AT && isNaN(Date.parse(env.JWT_SECRET_ROTATED_AT))) {
+  throw new Error(`JWT_SECRET_ROTATED_AT must be a valid ISO-8601 timestamp, got: "${env.JWT_SECRET_ROTATED_AT}"`);
+}
 
 // Validate AUTH_SERVER_SECRET_KEY starts with 'S' (Stellar secret key prefix)
 if (!env.AUTH_SERVER_SECRET_KEY.startsWith('S')) {

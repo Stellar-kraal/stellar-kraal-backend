@@ -1,5 +1,5 @@
 [workspace]
-members = ["stellarkraal", "carbon_oracle", "carbon_marketplace"]
+members = ["stellarkraal", "carbon_oracle", "carbon_marketplace", "tests"]
 resolver = "2"
 
 [profile.release]

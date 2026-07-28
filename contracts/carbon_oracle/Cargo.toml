@@ -1,0 +1,13 @@
+[package]
+name = "carbon-oracle"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+soroban-sdk = "22.0.0"
+
+[dev_dependencies]
+soroban-sdk = { version = "22.0.0", features = ["testutils"] }
+
+[lib]
+crate-type = ["cdylib", "rlib"]

@@ -1,0 +1,45 @@
+name: Upgrade Safety Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  upgrade-tests:
+    name: Run Upgrade Safety Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: wasm32-unknown-unknown
+          override: true
+      
+      - name: Build contracts
+        run: |
+          cd contracts
+          cargo build --release --target wasm32-unknown-unknown
+      
+      - name: Run upgrade tests
+        run: |
+          cd contracts
+          cargo test --test upgrade_safety -- --nocapture
+      
+      - name: Run negative upgrade tests
+        run: |
+          cd contracts
+          cargo test --test upgrade_safety negative -- --nocapture
+      
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upgrade-test-results
+          path: contracts/target/debug/

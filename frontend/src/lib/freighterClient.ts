@@ -29,6 +29,15 @@ declare global {
 }
 
 function getTestApi(): FreighterTestApi | undefined {
+  // Safety guard: the E2E hook MUST NOT be reachable in production builds.
+  // Gating on NODE_ENV here ensures that bundlers (Next.js / webpack / swc)
+  // dead-code-eliminate the entire branch at build time when
+  // NODE_ENV === 'production', so the global is never exposed to
+  // real users. Without this guard, any script with access to the page
+  // (XSS, malicious extension, compromised dependency) could set
+  // window.__STELLARKRAAL_E2E__ to spoof wallet connection and forge
+  // "signed" transactions (threat FE-01 in docs/security/threat-model.md).
+  if (process.env.NODE_ENV === "production") return undefined;
   if (typeof window === "undefined") return undefined;
   return window.__STELLARKRAAL_E2E__;
 }
